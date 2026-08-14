@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Hello Node",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/hello.js",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Hello Python",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/hello.py",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

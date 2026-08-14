@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Mini Cursor",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "electron:dev"
+      ],
+      "cwd": "${workspaceFolder}\\frontend",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Build Mini Cursor EXE",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": ".\\scripts\\build-exe.ps1",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Mini Cursor API (standalone)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-api",
+      "program": "${workspaceFolder}\\backend\\bin\\Debug\\net10.0\\MiniCursor.Api.dll",
+      "cwd": "${workspaceFolder}\\backend",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:5154"
+      },
+      "console": "integratedTerminal"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "List workspace files",
+      "type": "shell",
+      "command": "Get-ChildItem",
+      "args": ["-Name"]
+    },
+    {
+      "label": "Run hello.js",
+      "type": "shell",
+      "command": "node",
+      "args": ["hello.js"]
+    }
+  ]
+}
