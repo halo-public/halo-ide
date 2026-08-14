@@ -1,4 +1,4 @@
-import { Download, History, Image as ImageIcon, Paperclip, Plus, SendHorizontal, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, History, Image as ImageIcon, Paperclip, Plus, SendHorizontal, Wrench, X } from 'lucide-react'
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -8,6 +8,7 @@ import type {
   ChatDetail,
   ChatMessage,
   ChatSummary,
+  ChatToolCall,
   CopilotModel,
   MessageAttachmentRequest,
   PendingAttachment,
@@ -32,6 +33,7 @@ interface ChatRuntime {
   sending: boolean
   streaming: string
   error: string | null
+  toolCalls: ChatToolCall[]
 }
 
 export interface ChatTurnIndicator {
@@ -40,7 +42,11 @@ export interface ChatTurnIndicator {
   chatTitle: string
 }
 
-const emptyRuntime = (): ChatRuntime => ({ sending: false, streaming: '', error: null })
+const emptyRuntime = (): ChatRuntime => ({ sending: false, streaming: '', error: null, toolCalls: [] })
+
+const DEFAULT_PROVIDERS: ProviderOption[] = [
+  { id: 'copilot', name: 'Copilot', configured: true },
+]
 
 export interface ChatPanelHandle {
   insertIntoComposer: (text: string) => void
@@ -58,7 +64,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
   const [input, setInput] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [models, setModels] = useState<CopilotModel[]>([])
-  const [providers, setProviders] = useState<ProviderOption[]>([])
+  const [providers, setProviders] = useState<ProviderOption[]>(DEFAULT_PROVIDERS)
   const [provider, setProvider] = useState('copilot')
   const [model, setModel] = useState('')
   const [dragOver, setDragOver] = useState(false)
@@ -69,6 +75,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
   const bottomRef = useRef<HTMLDivElement>(null)
   const dragDepthRef = useRef(0)
   const historyRef = useRef<HTMLDivElement>(null)
+  const activeIdRef = useRef(activeId)
+  const chatCacheRef = useRef(chatCache)
+  activeIdRef.current = activeId
+  chatCacheRef.current = chatCache
 
   const importModalOpen = importOpen ?? localImportOpen
   const setImportModalOpen = (open: boolean) => {
@@ -81,13 +91,16 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
   const sending = runtime.sending
   const streaming = runtime.streaming
   const error = runtime.error
+  const liveToolCalls = runtime.toolCalls
 
   const activeTurn = useMemo<ChatTurnIndicator | null>(() => {
     if (!chat) return null
+    const running = liveToolCalls.find((t) => t.status === 'running') ?? liveToolCalls.find((t) => t.status === 'pending')
+    if (running) return { actor: 'assistant', label: `Running ${running.name}`, chatTitle: chat.title }
     if (streaming) return { actor: 'assistant', label: 'Copilot is thinking', chatTitle: chat.title }
     if (sending) return { actor: 'user', label: 'Waiting for Copilot', chatTitle: chat.title }
     return null
-  }, [chat, sending, streaming])
+  }, [chat, sending, streaming, liveToolCalls])
 
   const openChats = useMemo(() => {
     const byId = new Map(chats.map((c) => [c.id, c]))
@@ -101,10 +114,10 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
 
   const resolveModel = (preferred: string | null | undefined, list: CopilotModel[], fallback: string) => {
     const preferredModel = normalizeModel(preferred)
-    if (preferredModel && list.some((m) => m.id === preferredModel)) return preferredModel
+    if (preferredModel && (list.length === 0 || list.some((m) => m.id === preferredModel))) return preferredModel
     const fallbackModel = normalizeModel(fallback)
-    if (fallbackModel && list.some((m) => m.id === fallbackModel)) return fallbackModel
-    return list.find((m) => !m.policyState || m.policyState === 'enabled')?.id ?? list[0]?.id ?? ''
+    if (fallbackModel && (list.length === 0 || list.some((m) => m.id === fallbackModel))) return fallbackModel
+    return list.find((m) => !m.policyState || m.policyState === 'enabled')?.id ?? list[0]?.id ?? preferredModel ?? fallbackModel
   }
 
   const persistTabs = (nextOpen: string[], nextActive: string | null) => {
@@ -129,6 +142,16 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     return list
   }
 
+  const applyChatSelection = async (detail: { provider?: string | null; model?: string | null }) => {
+    const nextProvider = normalizeProvider(detail.provider)
+    setProvider(nextProvider)
+    try {
+      await loadModels(nextProvider, detail.model, '')
+    } catch {
+      setModel((prev) => resolveModel(detail.model, [], prev))
+    }
+  }
+
   const ensureOpen = (id: string, nextOpen = openIds): string[] =>
     nextOpen.includes(id) ? nextOpen : [...nextOpen, id]
 
@@ -147,14 +170,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     if (!chatCache[id]) {
       try {
         const detail = await loadDetail(id)
-        setProvider(normalizeProvider(detail.provider))
-        setModel((prev) => resolveModel(detail.model, models, prev))
+        await applyChatSelection(detail)
       } catch (e) {
         patchRuntime(id, { error: e instanceof Error ? e.message : 'Failed to load chat' })
       }
     } else {
-      setProvider(normalizeProvider(chatCache[id].provider))
-      setModel((prev) => resolveModel(chatCache[id].model, models, prev))
+      await applyChatSelection(chatCache[id])
     }
   }
 
@@ -184,8 +205,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
         await refreshSummaries()
         nextOpen = [created.id]
         nextActive = created.id
-        setProvider(normalizeProvider(created.provider))
-        setModel((prev) => resolveModel(created.model, models, prev))
+        await applyChatSelection(created)
       }
     }
 
@@ -196,8 +216,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     if (nextActive) {
       try {
         const detail = await loadDetail(nextActive)
-        setProvider(normalizeProvider(detail.provider))
-        setModel((prev) => resolveModel(detail.model, models, prev))
+        await applyChatSelection(detail)
       } catch (e) {
         patchRuntime(nextActive, { error: e instanceof Error ? e.message : 'Failed to load chat' })
       }
@@ -232,20 +251,38 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
   }, [workspace?.root])
 
   useEffect(() => {
-    Promise.all([api.getCopilotStatus(), api.listAiProviders()])
-      .then(async ([status, nextProviders]) => {
-        setProviders(nextProviders)
-        const nextProvider = normalizeProvider(chat?.provider ?? status.provider)
+    let cancelled = false
+    let timer: number | undefined
+
+    const load = async (attempt = 0) => {
+      try {
+        const [status, nextProviders] = await Promise.all([api.getCopilotStatus(), api.listAiProviders()])
+        if (cancelled) return
+        setProviders(nextProviders.length ? nextProviders : DEFAULT_PROVIDERS)
+        const current = chatCacheRef.current[activeIdRef.current ?? '']
+        const nextProvider = normalizeProvider(current?.provider ?? status.provider)
         setProvider(nextProvider)
-        const list = await loadModels(nextProvider, chat?.model, status.model ?? '')
-        setModel((prev) => resolveModel(prev || chat?.model, list, status.model ?? ''))
-      })
-      .catch(() => {
-        setProviders([])
-        setModels([])
-      })
+        await loadModels(nextProvider, current?.model, status.model ?? '')
+        if (cancelled) return
+        if (nextProvider === 'copilot' && attempt < 8 && (!status.connected || attempt < 2)) {
+          timer = window.setTimeout(() => void load(attempt + 1), 500)
+        }
+      } catch {
+        if (cancelled) return
+        setProviders((prev) => (prev.length ? prev : DEFAULT_PROVIDERS))
+        if (attempt < 10) {
+          timer = window.setTimeout(() => void load(attempt + 1), 500)
+        }
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [workspace?.root])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -319,8 +356,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     setOpenIds(opened)
     setActiveId(created.id)
     persistTabs(opened, created.id)
-    setProvider(normalizeProvider(created.provider))
-    setModel((prev) => resolveModel(created.model, models, prev))
+    await applyChatSelection(created)
     patchRuntime(created.id, emptyRuntime())
     setInput('')
     setAttachments([])
@@ -350,12 +386,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     setActiveId(nextActive)
     persistTabs(nextOpen, nextActive)
     if (nextActive && nextActive !== activeId && !chatCache[nextActive]) {
-      void loadDetail(nextActive).catch((e: Error) =>
-        patchRuntime(nextActive!, { error: e.message }),
-      )
-    } else if (nextActive) {
-      setProvider(normalizeProvider(chatCache[nextActive]?.provider))
-      setModel((prev) => resolveModel(chatCache[nextActive]?.model, models, prev))
+      void loadDetail(nextActive)
+        .then((detail) => applyChatSelection(detail))
+        .catch((e: Error) => patchRuntime(nextActive!, { error: e.message }))
+    } else if (nextActive && chatCache[nextActive]) {
+      void applyChatSelection(chatCache[nextActive])
     }
   }
 
@@ -398,12 +433,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     })
 
     if (nextActive && nextActive !== activeId && !chatCache[nextActive]) {
-      void loadDetail(nextActive).catch((e: Error) =>
-        patchRuntime(nextActive!, { error: e.message }),
-      )
-    } else if (nextActive && chatCache[nextActive]?.model) {
-      setProvider(normalizeProvider(chatCache[nextActive]?.provider))
-      setModel(chatCache[nextActive].model || model)
+      void loadDetail(nextActive)
+        .then((detail) => applyChatSelection(detail))
+        .catch((e: Error) => patchRuntime(nextActive!, { error: e.message }))
+    } else if (nextActive && chatCache[nextActive]) {
+      void applyChatSelection(chatCache[nextActive])
     }
   }
 
@@ -419,8 +453,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     patchRuntime(first, emptyRuntime())
     try {
       const detail = await loadDetail(first)
-      setProvider(normalizeProvider(detail.provider))
-      setModel((prev) => resolveModel(detail.model, models, prev))
+      await applyChatSelection(detail)
     } catch (e) {
       patchRuntime(first, { error: e instanceof Error ? e.message : 'Failed to load chat' })
     }
@@ -519,7 +552,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
 
     const chatId = activeId
     const baseChat = chatCache[chatId] ?? chat
-    patchRuntime(chatId, { sending: true, error: null, streaming: '' })
+    patchRuntime(chatId, { sending: true, error: null, streaming: '', toolCalls: [] })
 
     const payload: MessageAttachmentRequest[] = attachments.map((a) =>
       a.kind === 'file'
@@ -533,6 +566,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
 
     let localMessages = [...(baseChat.messages ?? [])]
     let streamed = ''
+    let liveTools: ChatToolCall[] = []
 
     try {
       await api.sendMessage(chatId, content, payload, (type, body) => {
@@ -546,12 +580,20 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
               messages: localMessages,
             },
           }))
+        } else if (type === 'tool') {
+          liveTools = upsertToolCall(liveTools, body as ChatToolCall)
+          patchRuntime(chatId, { toolCalls: liveTools })
         } else if (type === 'delta') {
           const chunk = (body as { content: string }).content
           streamed += chunk
           patchRuntime(chatId, { streaming: streamed })
         } else if (type === 'done') {
-          localMessages = [...localMessages, body as ChatMessage]
+          const doneMessage = body as ChatMessage
+          const withTools =
+            doneMessage.toolCalls?.length || !liveTools.length
+              ? doneMessage
+              : { ...doneMessage, toolCalls: liveTools }
+          localMessages = [...localMessages, withTools]
           setChatCache((prev) => {
             const current = prev[chatId] ?? baseChat
             return {
@@ -567,7 +609,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
               },
             }
           })
-          patchRuntime(chatId, { streaming: '' })
+          patchRuntime(chatId, { streaming: '', toolCalls: [] })
         } else if (type === 'error') {
           patchRuntime(chatId, {
             error: (body as { message: string }).message,
@@ -708,7 +750,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             <p>Open a session from history (last 3 days) or start a new chat.</p>
           </div>
         )}
-        {chat && messages.length === 0 && !streaming && (
+        {chat && messages.length === 0 && !streaming && liveToolCalls.length === 0 && (
           <div className="empty-state">
             <h2>Copilot Chat</h2>
             <p>Ask about your workspace. Attach files with the paperclip, paste from the clipboard, or drop them here.</p>
@@ -724,21 +766,29 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
                 ))}
               </div>
             )}
-            <div className="bubble">
-              {m.role === 'assistant' ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-              ) : (
-                m.content
-              )}
-            </div>
+            {m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0 && (
+              <ToolCallList calls={m.toolCalls} />
+            )}
+            {m.content && (
+              <div className="bubble">
+                {m.role === 'assistant' ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                ) : (
+                  m.content
+                )}
+              </div>
+            )}
           </div>
         ))}
-        {streaming && (
+        {(streaming || liveToolCalls.length > 0) && (
           <div className="message assistant">
             <div className="message-role">Copilot</div>
-            <div className="bubble streaming-cursor">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streaming}</ReactMarkdown>
-            </div>
+            {liveToolCalls.length > 0 && <ToolCallList calls={liveToolCalls} />}
+            {streaming && (
+              <div className="bubble streaming-cursor">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streaming}</ReactMarkdown>
+              </div>
+            )}
           </div>
         )}
         {error && <div className="error-text">{error}</div>}
@@ -812,11 +862,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             <div className="composer-right">
               <select
                 className="model-select"
-                value={provider}
+                value={providers.some((p) => p.id === provider) ? provider : (providers[0]?.id ?? 'copilot')}
                 onChange={(e) => void changeProvider(e.target.value)}
-                disabled={!providers.length || sending}
+                disabled={sending}
                 title="AI provider"
               >
+                {providers.length === 0 && <option value="copilot">Copilot</option>}
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
@@ -827,10 +878,13 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
                 className="model-select"
                 value={model}
                 onChange={(e) => void changeModel(e.target.value)}
-                disabled={!models.length || sending}
+                disabled={sending || (!models.length && !model)}
                 title="Model"
               >
-                {models.length === 0 && <option value="">No models</option>}
+                {models.length === 0 && <option value={model}>{model || 'No models'}</option>}
+                {model && models.length > 0 && !models.some((m) => m.id === model) && (
+                  <option value={model}>{model}</option>
+                )}
                 {models.map((m) => (
                   <option key={m.id} value={m.id} disabled={m.policyState === 'disabled'}>
                     {m.name}
@@ -882,6 +936,62 @@ function formatRelative(iso: string): string {
   if (hours < 48) return `${hours}h`
   const days = Math.round(hours / 24)
   return `${days}d`
+}
+
+function upsertToolCall(list: ChatToolCall[], call: ChatToolCall): ChatToolCall[] {
+  const index = list.findIndex((item) => item.id === call.id)
+  if (index < 0) return [...list, call]
+  const next = [...list]
+  next[index] = call
+  return next
+}
+
+function toolStatusLabel(status: string) {
+  if (status === 'running') return 'Running'
+  if (status === 'pending') return 'Preparing'
+  if (status === 'error') return 'Failed'
+  return 'Done'
+}
+
+function prettyToolText(value?: string | null) {
+  if (!value) return ''
+  const trimmed = value.trim()
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2)
+  } catch {
+    return trimmed
+  }
+}
+
+function ToolCallList({ calls }: { calls: ChatToolCall[] }) {
+  return (
+    <div className="tool-call-list">
+      {calls.map((call) => (
+        <ToolCallCard key={call.id} call={call} />
+      ))}
+    </div>
+  )
+}
+
+function ToolCallCard({ call }: { call: ChatToolCall }) {
+  const [open, setOpen] = useState(false)
+  const preview = call.detail || call.error || call.arguments || call.result || ''
+  const body = [call.arguments && `Arguments\n${prettyToolText(call.arguments)}`, call.result && `Result\n${prettyToolText(call.result)}`, call.error && `Error\n${call.error}`]
+    .filter(Boolean)
+    .join('\n\n')
+
+  return (
+    <div className={`tool-call ${call.status}`}>
+      <button type="button" className="tool-call-header" onClick={() => setOpen((value) => !value)}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <Wrench size={13} />
+        <span className="tool-call-name">{call.name}</span>
+        <span className="tool-call-status">{toolStatusLabel(call.status)}</span>
+        {!open && preview && <span className="tool-call-preview">{preview}</span>}
+      </button>
+      {open && body && <pre className="tool-call-body">{body}</pre>}
+    </div>
+  )
 }
 
 function FileChipIcon() {

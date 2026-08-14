@@ -102,12 +102,23 @@ export interface ChatAttachment {
   dataBase64?: string | null
 }
 
+export interface ChatToolCall {
+  id: string
+  name: string
+  status: 'pending' | 'running' | 'complete' | 'error' | string
+  detail?: string | null
+  arguments?: string | null
+  result?: string | null
+  error?: string | null
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | string
   content: string
   createdAt: string
   attachments?: ChatAttachment[] | null
+  toolCalls?: ChatToolCall[] | null
 }
 
 export interface ChatDetail {

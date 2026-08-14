@@ -92,12 +92,22 @@ public sealed record ChatAttachmentDto(
     string? MimeType = null,
     string? DataBase64 = null);
 
+public sealed record ChatToolCallDto(
+    string Id,
+    string Name,
+    string Status,
+    string? Detail = null,
+    string? Arguments = null,
+    string? Result = null,
+    string? Error = null);
+
 public sealed record ChatMessageDto(
     string Id,
     string Role,
     string Content,
     DateTimeOffset CreatedAt,
-    IReadOnlyList<ChatAttachmentDto>? Attachments = null);
+    IReadOnlyList<ChatAttachmentDto>? Attachments = null,
+    IReadOnlyList<ChatToolCallDto>? ToolCalls = null);
 
 public sealed record ChatDetailDto(
     string Id,

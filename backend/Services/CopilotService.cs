@@ -58,25 +58,41 @@ public sealed class CopilotService : IAsyncDisposable, IHostedService
 
     public async Task<IReadOnlyList<CopilotModelDto>> ListModelsAsync(CancellationToken cancellationToken = default)
     {
-        EnsureReady();
-        var models = await _client!.ListModelsAsync(cancellationToken);
-        var list = models
-            .Select(m => new CopilotModelDto(
-                m.Id ?? "",
-                string.IsNullOrWhiteSpace(m.Name) ? m.Id ?? "" : m.Name,
-                m.Policy?.State))
-            .Where(m => !string.IsNullOrWhiteSpace(m.Id))
-            .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (!string.IsNullOrWhiteSpace(_model) &&
-            !list.Any(m => string.Equals(m.Id, _model, StringComparison.OrdinalIgnoreCase)))
+        try
         {
-            list.Insert(0, new CopilotModelDto(_model, _model, "copilot"));
-        }
+            if (_client is null || !_connected)
+                return FallbackModels();
 
-        return list;
+            var models = await _client.ListModelsAsync(cancellationToken);
+            var list = models
+                .Select(m => new CopilotModelDto(
+                    m.Id ?? "",
+                    string.IsNullOrWhiteSpace(m.Name) ? m.Id ?? "" : m.Name,
+                    "copilot",
+                    m.Policy?.State))
+                .Where(m => !string.IsNullOrWhiteSpace(m.Id))
+                .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (!string.IsNullOrWhiteSpace(_model) &&
+                !list.Any(m => string.Equals(m.Id, _model, StringComparison.OrdinalIgnoreCase)))
+            {
+                list.Insert(0, new CopilotModelDto(_model, _model, "copilot"));
+            }
+
+            return list.Count > 0 ? list : FallbackModels();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list Copilot models");
+            return FallbackModels();
+        }
     }
+
+    private IReadOnlyList<CopilotModelDto> FallbackModels() =>
+        string.IsNullOrWhiteSpace(_model)
+            ? []
+            : [new CopilotModelDto(_model, _model, "copilot")];
 
     public async Task<CopilotStatusDto> SetModelAsync(string model)
     {

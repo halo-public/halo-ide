@@ -283,10 +283,12 @@ public sealed class ChatMessageRecord
     public string Content { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; }
     public List<ChatAttachmentRecord>? Attachments { get; set; }
+    public List<ChatToolCallDto>? ToolCalls { get; set; }
 
     public ChatMessageDto ToDto() =>
         new(Id, Role, Content, CreatedAt,
-            Attachments?.Select(a => a.ToDto()).ToList());
+            Attachments?.Select(a => a.ToDto()).ToList(),
+            ToolCalls);
 }
 
 public sealed class ChatAttachmentRecord

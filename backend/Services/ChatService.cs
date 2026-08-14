@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using GitHub.Copilot;
 using MiniCursor.Api.Models;
@@ -172,9 +174,30 @@ public sealed class ChatService
         _store.Save(chat);
 
         var assistantBuffer = new StringBuilder();
-        var pendingDeltas = Channel.CreateUnbounded<string>();
+        var pendingEvents = Channel.CreateUnbounded<ChatStreamEvent>();
+        var tools = new ConcurrentDictionary<string, ChatToolCallDto>(StringComparer.Ordinal);
         string? error = null;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ChatToolCallDto GetOrCreateTool(string? id, string? name)
+        {
+            var key = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id.Trim();
+            if (tools.TryGetValue(key, out var existing))
+            {
+                if (!string.IsNullOrWhiteSpace(name) &&
+                    !string.Equals(existing.Name, name, StringComparison.Ordinal))
+                    return existing with { Name = name };
+                return existing;
+            }
+
+            return new ChatToolCallDto(key, string.IsNullOrWhiteSpace(name) ? "tool" : name.Trim(), "pending");
+        }
+
+        void EmitTool(ChatToolCallDto call)
+        {
+            tools[call.Id] = call;
+            pendingEvents.Writer.TryWrite(ChatStreamEvent.Tool(call));
+        }
 
         using var reg = cancellationToken.Register(() => done.TrySetCanceled(cancellationToken));
         using var sub = session.On<SessionEvent>(evt =>
@@ -185,7 +208,7 @@ public sealed class ChatService
                     if (!string.IsNullOrEmpty(delta.Data.DeltaContent))
                     {
                         assistantBuffer.Append(delta.Data.DeltaContent);
-                        pendingDeltas.Writer.TryWrite(delta.Data.DeltaContent);
+                        pendingEvents.Writer.TryWrite(ChatStreamEvent.Delta(delta.Data.DeltaContent));
                     }
                     break;
                 case AssistantMessageEvent message:
@@ -194,14 +217,84 @@ public sealed class ChatService
                         assistantBuffer.Clear();
                         assistantBuffer.Append(message.Data.Content);
                     }
+                    if (message.Data.ToolRequests is { Length: > 0 })
+                    {
+                        foreach (var req in message.Data.ToolRequests)
+                        {
+                            var current = GetOrCreateTool(req.ToolCallId, req.Name ?? req.ToolTitle);
+                            var alreadyDone = current.Status is "complete" or "error";
+                            EmitTool(current with
+                            {
+                                Status = alreadyDone ? current.Status : "pending",
+                                Detail = req.IntentionSummary ?? current.Detail,
+                                Arguments = FormatValue(req.Arguments) ?? current.Arguments
+                            });
+                        }
+                    }
                     break;
+                case AssistantToolCallDeltaEvent toolDelta:
+                {
+                    var current = GetOrCreateTool(toolDelta.Data.ToolCallId, toolDelta.Data.ToolName);
+                    var args = current.Arguments ?? "";
+                    if (!string.IsNullOrEmpty(toolDelta.Data.InputDelta))
+                        args += toolDelta.Data.InputDelta;
+                    EmitTool(current with
+                    {
+                        Arguments = args,
+                        Status = current.Status is "complete" or "error" ? current.Status : "pending"
+                    });
+                    break;
+                }
+                case ToolExecutionStartEvent start:
+                {
+                    var current = GetOrCreateTool(start.Data.ToolCallId, start.Data.ToolName);
+                    EmitTool(current with
+                    {
+                        Status = "running",
+                        Arguments = FormatValue(start.Data.Arguments) ?? current.Arguments
+                    });
+                    break;
+                }
+                case ToolExecutionProgressEvent progress:
+                {
+                    var current = GetOrCreateTool(progress.Data.ToolCallId, null);
+                    EmitTool(current with
+                    {
+                        Status = current.Status is "complete" or "error" ? current.Status : "running",
+                        Detail = progress.Data.ProgressMessage ?? current.Detail
+                    });
+                    break;
+                }
+                case ToolExecutionPartialResultEvent partial:
+                {
+                    var current = GetOrCreateTool(partial.Data.ToolCallId, null);
+                    var result = (current.Result ?? "") + (partial.Data.PartialOutput ?? "");
+                    EmitTool(current with
+                    {
+                        Status = current.Status is "complete" or "error" ? current.Status : "running",
+                        Result = Truncate(result, 8000)
+                    });
+                    break;
+                }
+                case ToolExecutionCompleteEvent complete:
+                {
+                    var current = GetOrCreateTool(complete.Data.ToolCallId, null);
+                    var result = complete.Data.Result?.DetailedContent ?? complete.Data.Result?.Content;
+                    EmitTool(current with
+                    {
+                        Status = complete.Data.Success ? "complete" : "error",
+                        Result = FormatValue(result, 8000) ?? current.Result,
+                        Error = complete.Data.Error?.Message ?? current.Error
+                    });
+                    break;
+                }
                 case SessionErrorEvent err:
                     error = err.Data.Message ?? "Copilot session error";
-                    pendingDeltas.Writer.TryComplete();
+                    pendingEvents.Writer.TryComplete();
                     done.TrySetResult();
                     break;
                 case SessionIdleEvent:
-                    pendingDeltas.Writer.TryComplete();
+                    pendingEvents.Writer.TryComplete();
                     done.TrySetResult();
                     break;
             }
@@ -209,10 +302,10 @@ public sealed class ChatService
 
         // Forward deltas while SendAsync runs; waiting until after it returns
         // buffers the whole reply and the UI never appears to stream.
-        var forwardDeltas = Task.Run(async () =>
+        var forwardEvents = Task.Run(async () =>
         {
-            await foreach (var chunk in pendingDeltas.Reader.ReadAllAsync(cancellationToken))
-                await writer.WriteAsync(ChatStreamEvent.Delta(chunk), cancellationToken);
+            await foreach (var streamEvent in pendingEvents.Reader.ReadAllAsync(cancellationToken))
+                await writer.WriteAsync(streamEvent, cancellationToken);
         }, cancellationToken);
 
         try
@@ -228,9 +321,9 @@ public sealed class ChatService
         }
         finally
         {
-            pendingDeltas.Writer.TryComplete();
+            pendingEvents.Writer.TryComplete();
             done.TrySetResult();
-            try { await forwardDeltas; }
+            try { await forwardEvents; }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { /* client gone */ }
         }
 
@@ -252,7 +345,8 @@ public sealed class ChatService
             Id = Guid.NewGuid().ToString("N"),
             Role = "assistant",
             Content = final,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = DateTimeOffset.UtcNow,
+            ToolCalls = tools.IsEmpty ? null : tools.Values.ToList()
         };
         chat.Messages.Add(assistant);
         _store.Save(chat);
@@ -309,12 +403,31 @@ public sealed class ChatService
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..(max - 1)].TrimEnd() + "…";
+
+    private static string? FormatValue(object? value, int max = 4000)
+    {
+        if (value is null) return null;
+        if (value is string text)
+            return string.IsNullOrWhiteSpace(text) ? null : Truncate(text, max);
+
+        try
+        {
+            var json = JsonSerializer.Serialize(value);
+            return string.IsNullOrWhiteSpace(json) || json == "null" ? null : Truncate(json, max);
+        }
+        catch
+        {
+            var fallback = value.ToString();
+            return string.IsNullOrWhiteSpace(fallback) ? null : Truncate(fallback, max);
+        }
+    }
 }
 
 public sealed record ChatStreamEvent(string Type, object? Payload)
 {
     public static ChatStreamEvent User(ChatMessageDto message) => new("user", message);
     public static ChatStreamEvent Delta(string content) => new("delta", new { content });
+    public static ChatStreamEvent Tool(ChatToolCallDto call) => new("tool", call);
     public static ChatStreamEvent Done(ChatMessageDto message) => new("done", message);
     public static ChatStreamEvent Error(string message) => new("error", new { message });
 }
