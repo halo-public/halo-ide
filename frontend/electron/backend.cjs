@@ -4,7 +4,7 @@ const path = require('path')
 const fs = require('fs')
 
 const API_HOST = '127.0.0.1'
-const API_PORT = Number(process.env.MINI_CURSOR_API_PORT || 5154)
+const API_PORT = Number(process.env.MINI_CURSOR_API_PORT || 45154)
 const API_BASE = `http://${API_HOST}:${API_PORT}`
 const HEALTH_URL = `${API_BASE}/api/health`
 

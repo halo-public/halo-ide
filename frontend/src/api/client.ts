@@ -17,6 +17,7 @@ import type {
   TaskConfig,
   WorkspaceInfo,
   WorkspaceChatInfo,
+  AuraWireDetectResult,
 } from './types'
 
 function apiUrl(path: string): string {
@@ -120,6 +121,8 @@ export const api = {
     }),
   getCopilotStatus: () => request<CopilotStatus>('/api/copilot/status'),
   listAiProviders: () => request<ProviderOption[]>('/api/ai/providers'),
+  detectAuraWire: () =>
+    request<AuraWireDetectResult>('/api/ai/wire/detect', { method: 'POST' }),
   listModels: (provider: string) => request<CopilotModel[]>(`/api/ai/models?provider=${encodeURIComponent(provider)}`),
   getAiSettings: () => request<AiSettings>('/api/settings/ai'),
   saveAiSettings: (settings: AiSettings) =>
@@ -139,10 +142,10 @@ export const api = {
       body: JSON.stringify({ provider, model, chatId: chatId || undefined }),
     }),
   listChats: () => request<ChatSummary[]>('/api/chats'),
-  createChat: (title?: string) =>
+  createChat: (title?: string, provider?: string, model?: string) =>
     request<ChatDetail>('/api/chats', {
       method: 'POST',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, provider, model }),
     }),
   getChat: (id: string) => request<ChatDetail>(`/api/chats/${id}`),
   deleteChat: (id: string) => request<void>(`/api/chats/${id}`, { method: 'DELETE' }),
@@ -160,11 +163,17 @@ export const api = {
     content: string,
     attachments: MessageAttachmentRequest[],
     onEvent: (type: string, payload: unknown) => void,
+    options?: { provider?: string; model?: string },
   ) => {
     const res = await fetch(apiUrl(`/api/chats/${chatId}/messages`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, attachments }),
+      body: JSON.stringify({
+        content,
+        attachments,
+        provider: options?.provider,
+        model: options?.model,
+      }),
     })
     if (!res.ok || !res.body) {
       throw new Error('Failed to send message')

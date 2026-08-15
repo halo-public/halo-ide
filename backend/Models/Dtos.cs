@@ -119,11 +119,13 @@ public sealed record ChatDetailDto(
     string? Provider = null,
     string? Model = null);
 
-public sealed record CreateChatRequest(string? Title);
+public sealed record CreateChatRequest(string? Title, string? Provider = null, string? Model = null);
 
 public sealed record SendMessageRequest(
     string Content,
-    IReadOnlyList<MessageAttachmentRequest>? Attachments = null);
+    IReadOnlyList<MessageAttachmentRequest>? Attachments = null,
+    string? Provider = null,
+    string? Model = null);
 
 public sealed record MessageAttachmentRequest(
     string Kind,
@@ -159,6 +161,12 @@ public sealed record ProviderSettingsDto(
     string? BaseUrl = null);
 
 public sealed record AiSettingsDto(IReadOnlyList<ProviderSettingsDto> Providers);
+
+public sealed record AuraWireDetectDto(
+    bool Installed,
+    bool Running,
+    string? BaseUrl = null,
+    string? Message = null);
 
 public sealed record CredentialsSettingsDto(string? GitHubPat = null);
 

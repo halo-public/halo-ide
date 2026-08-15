@@ -37,6 +37,8 @@ backend/publish/
 frontend/node_modules/
 frontend/dist/
 frontend/release/
+TestResults/
+.release-notes-*.md
 
 # IDE
 .vs/

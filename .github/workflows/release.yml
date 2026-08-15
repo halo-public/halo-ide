@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver to release (no v prefix), e.g. 0.1.0'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $ver = '${{ inputs.version }}'.Trim() -replace '^v', ''
+          } else {
+            $ver = $env:GITHUB_REF_NAME -replace '^v', ''
+          }
+          if ($ver -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Invalid version '$ver'. Use semver like 0.1.0 (tag v0.1.0)."
+          }
+          $prerelease = if ($ver -match '-') { 'true' } else { 'false' }
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          "tag=v$ver" >> $env:GITHUB_OUTPUT
+          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing Mini Cursor $ver (tag v$ver)"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip if installer already on the GitHub Release
+        id: skip
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $ver = '${{ steps.version.outputs.version }}'
+          $previous = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          $json = gh release view $tag --json assets 2>$null
+          $code = $LASTEXITCODE
+          $ErrorActionPreference = $previous
+          if ($code -eq 0 -and $json) {
+            $assets = $json | ConvertFrom-Json
+            $name = "mini-cursor-setup-$ver.exe"
+            if (@($assets.assets.name) -contains $name) {
+              'skip=true' >> $env:GITHUB_OUTPUT
+              Write-Host "Release $tag already has $name; skipping CI rebuild."
+              return
+            }
+          }
+          'skip=false' >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.skip.outputs.skip != 'true'
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        if: steps.skip.outputs.skip != 'true'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache Electron and electron-builder downloads
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/electron
+            ${{ github.workspace }}/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Test
+        if: steps.skip.outputs.skip != 'true'
+        run: ./scripts/test.ps1
+
+      - name: Build installer
+        if: steps.skip.outputs.skip != 'true'
+        run: ./scripts/build-installer.ps1 -Version ${{ steps.version.outputs.version }}
+
+      - name: Upload workflow artifacts
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-cursor-setup-${{ steps.version.outputs.version }}
+          if-no-files-found: error
+          path: |
+            frontend/release/mini-cursor-setup-${{ steps.version.outputs.version }}.exe
+            frontend/release/mini-cursor-setup-${{ steps.version.outputs.version }}.exe.blockmap
+            frontend/release/latest.yml
+
+      - name: Publish GitHub Release
+        if: steps.skip.outputs.skip != 'true'
+        run: |
+          $publishArgs = @{
+            Version = '${{ steps.version.outputs.version }}'
+          }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $publishArgs.TargetSha = $env:GITHUB_SHA
+          } else {
+            $publishArgs.VerifyTag = $true
+          }
+          ./scripts/publish-github-release.ps1 @publishArgs
+
+      - name: Summary
+        if: always()
+        run: |
+          $ver = '${{ steps.version.outputs.version }}'
+          $tag = '${{ steps.version.outputs.tag }}'
+          $setup = "frontend/release/mini-cursor-setup-$ver.exe"
+          $lines = @(
+            "## Mini Cursor $ver",
+            "",
+            "- Tag: ``$tag``",
+            "- Event: ``$env:GITHUB_EVENT_NAME``"
+          )
+          if (Test-Path $setup) {
+            $sizeMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+            $lines += "- Installer: ``mini-cursor-setup-$ver.exe`` ($sizeMb MB)"
+          }
+          $lines += "- Release: https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
+          $lines -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

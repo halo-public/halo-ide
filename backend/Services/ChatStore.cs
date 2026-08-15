@@ -79,6 +79,24 @@ public sealed class ChatStore
         return record;
     }
 
+    /// <summary>Provider from the most recently updated chat that has one set.</summary>
+    public string? GetMostRecentProvider()
+    {
+        lock (_gate)
+        {
+            var chatsDir = EnsureChatsDir();
+            var cutoff = DateTimeOffset.UtcNow - HistoryRetention;
+            return Directory.EnumerateFiles(chatsDir, "*.json")
+                .Select(LoadUnlocked)
+                .Where(c => c is not null
+                    && c.UpdatedAt >= cutoff
+                    && !string.IsNullOrWhiteSpace(c.Provider))
+                .OrderByDescending(c => c!.UpdatedAt)
+                .Select(c => c!.Provider)
+                .FirstOrDefault();
+        }
+    }
+
     /// <summary>Model from the most recently updated chat that has one set.</summary>
     public string? GetMostRecentModel()
     {

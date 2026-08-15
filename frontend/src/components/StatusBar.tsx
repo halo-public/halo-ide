@@ -9,6 +9,9 @@ interface Props {
   problemCount: number
   turnIndicator?: ChatTurnIndicator | null
   onProblemsClick: () => void
+  appVersion?: string
+  updateState?: MiniCursorUpdateState | null
+  onInstallUpdate?: () => void
 }
 
 export function StatusBar({
@@ -19,6 +22,9 @@ export function StatusBar({
   problemCount,
   turnIndicator,
   onProblemsClick,
+  appVersion,
+  updateState,
+  onInstallUpdate,
 }: Props) {
   return (
     <footer className="status-bar">
@@ -42,6 +48,17 @@ export function StatusBar({
           Ln {cursor.line}, Col {cursor.column}
         </span>
       )}
+      {updateState?.status === 'downloading' && (
+        <span className="status-item">
+          Updating {Math.round(updateState.percent ?? 0)}%
+        </span>
+      )}
+      {updateState?.status === 'downloaded' && (
+        <button className="status-item" onClick={() => onInstallUpdate?.()}>
+          Restart to update
+        </button>
+      )}
+      {appVersion && <span className="status-item">v{appVersion}</span>}
     </footer>
   )
 }

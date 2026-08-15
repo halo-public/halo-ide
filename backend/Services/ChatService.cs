@@ -12,6 +12,7 @@ public sealed class ChatService
     private readonly ChatStore _store;
     private readonly CopilotService _copilot;
     private readonly AiProviderService _providers;
+    private readonly ProviderChatService _providerChat;
     private readonly WorkspaceService _workspace;
     private readonly ILogger<ChatService> _logger;
 
@@ -19,12 +20,14 @@ public sealed class ChatService
         ChatStore store,
         CopilotService copilot,
         AiProviderService providers,
+        ProviderChatService providerChat,
         WorkspaceService workspace,
         ILogger<ChatService> logger)
     {
         _store = store;
         _copilot = copilot;
         _providers = providers;
+        _providerChat = providerChat;
         _workspace = workspace;
         _logger = logger;
     }
@@ -33,18 +36,26 @@ public sealed class ChatService
 
     public ChatDetailDto? Get(string id) => _store.Get(id)?.ToDetail();
 
-    public ChatDetailDto Create(string? title)
+    public ChatDetailDto Create(string? title, string? provider = null, string? model = null)
     {
-        var provider = "copilot";
-        var model = _store.GetMostRecentModel() ?? _copilot.Model;
-        if (!string.IsNullOrWhiteSpace(model) &&
-            !string.Equals(model, _copilot.Model, StringComparison.OrdinalIgnoreCase))
+        var normalizedProvider = string.IsNullOrWhiteSpace(provider)
+            ? (_store.GetMostRecentProvider() ?? "copilot")
+            : _providers.NormalizeProvider(provider);
+
+        var resolvedModel = string.IsNullOrWhiteSpace(model)
+            ? _store.GetMostRecentModel()
+            : model.Trim();
+
+        if (string.Equals(normalizedProvider, "copilot", StringComparison.OrdinalIgnoreCase))
         {
-            _ = _copilot.SetModelAsync(model);
+            if (string.IsNullOrWhiteSpace(resolvedModel))
+                resolvedModel = _copilot.Model;
+            else if (!string.Equals(resolvedModel, _copilot.Model, StringComparison.OrdinalIgnoreCase))
+                _ = _copilot.SetModelAsync(resolvedModel);
         }
 
-        var created = _store.Create(title, model);
-        created.Provider = provider;
+        var created = _store.Create(title, resolvedModel);
+        created.Provider = normalizedProvider;
         _store.Save(created);
         return created.ToDetail();
     }
@@ -159,15 +170,22 @@ public sealed class ChatService
         if (chat.Title == "New Chat" && !string.IsNullOrWhiteSpace(userMessage.Content))
             chat.Title = Truncate(userMessage.Content, 48);
 
-        var provider = string.IsNullOrWhiteSpace(chat.Provider) ? "copilot" : _providers.NormalizeProvider(chat.Provider);
+        var provider = !string.IsNullOrWhiteSpace(request.Provider)
+            ? _providers.NormalizeProvider(request.Provider)
+            : string.IsNullOrWhiteSpace(chat.Provider) ? "copilot" : _providers.NormalizeProvider(chat.Provider);
         chat.Provider = provider;
-        var model = string.IsNullOrWhiteSpace(chat.Model) ? _copilot.Model : chat.Model;
+        var model = !string.IsNullOrWhiteSpace(request.Model)
+            ? request.Model.Trim()
+            : string.IsNullOrWhiteSpace(chat.Model) ? _copilot.Model : chat.Model;
         chat.Model = model;
         _store.Save(chat);
         await writer.WriteAsync(ChatStreamEvent.User(userMessage.ToDto()), cancellationToken);
 
         if (!string.Equals(provider, "copilot", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"{provider} chat sending is not wired yet. Set keys in Settings, then switch back to Copilot for chat execution.");
+        {
+            await ProduceProviderAsync(chat, provider, model, writer, cancellationToken);
+            return;
+        }
 
         var session = await _copilot.GetOrCreateSessionAsync(chat.CopilotSessionId, _workspace.Root, model);
         chat.CopilotSessionId = session.SessionId;
@@ -347,6 +365,51 @@ public sealed class ChatService
             Content = final,
             CreatedAt = DateTimeOffset.UtcNow,
             ToolCalls = tools.IsEmpty ? null : tools.Values.ToList()
+        };
+        chat.Messages.Add(assistant);
+        _store.Save(chat);
+        await writer.WriteAsync(ChatStreamEvent.Done(assistant.ToDto()), cancellationToken);
+    }
+
+    private async Task ProduceProviderAsync(
+        ChatRecord chat,
+        string provider,
+        string model,
+        ChannelWriter<ChatStreamEvent> writer,
+        CancellationToken cancellationToken)
+    {
+        var assistantBuffer = new StringBuilder();
+        try
+        {
+            await foreach (var delta in _providerChat.StreamAsync(provider, model, chat.Messages, cancellationToken))
+            {
+                assistantBuffer.Append(delta);
+                await writer.WriteAsync(ChatStreamEvent.Delta(delta), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "{Provider} chat failed", provider);
+            await writer.WriteAsync(
+                ChatStreamEvent.Error(ex.Message),
+                cancellationToken);
+            return;
+        }
+
+        var final = assistantBuffer.ToString();
+        if (string.IsNullOrWhiteSpace(final))
+            final = $"(No response from {provider})";
+
+        var assistant = new ChatMessageRecord
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Role = "assistant",
+            Content = final,
+            CreatedAt = DateTimeOffset.UtcNow
         };
         chat.Messages.Add(assistant);
         _store.Save(chat);

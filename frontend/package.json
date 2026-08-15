@@ -8,14 +8,22 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "ensure-electron": "node ./scripts/ensure-electron.cjs",
     "build-api": "dotnet build ../backend/MiniCursor.Api.csproj -v q",
-    "electron:dev": "npm run ensure-electron && npm run build-api && concurrently -k -n vite,electron -c cyan,magenta \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "electron:dev": "npm run ensure-electron && npm run build-api && concurrently -k -n vite,electron -c cyan,magenta \"vite\" \"wait-on http://127.0.0.1:45173 && electron .\"",
     "electron:start": "npm run ensure-electron && npm run build-api && electron .",
     "electron:preview": "npm run build && npm run electron:start",
     "electron:build": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/build-exe.ps1",
+    "electron:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/build-installer.ps1",
     "postinstall": "node ./scripts/ensure-electron.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/halo-public/mini-cursor.git"
   },
   "build": {
     "appId": "com.minicursor.app",
@@ -43,14 +51,33 @@
     "win": {
       "target": [
         {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "dir",
           "arch": [
             "x64"
           ]
         }
       ],
-      "icon": "assets/icon.png",
-      "artifactName": "${productName}.${ext}"
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Mini Cursor",
+      "uninstallDisplayName": "Mini Cursor ${version}",
+      "artifactName": "${name}-setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "halo-public",
+      "repo": "mini-cursor",
+      "releaseType": "release"
     },
     "asar": true,
     "forceCodeSigning": false
@@ -59,6 +86,7 @@
     "@monaco-editor/react": "^4.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "electron-updater": "^6.7.3",
     "lucide-react": "^1.31.0",
     "monaco-editor": "^0.56.0",
     "react": "^19.2.8",
@@ -77,6 +105,7 @@
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.0",
+    "vitest": "^4.1.10",
     "wait-on": "^9.1.0"
   }
 }

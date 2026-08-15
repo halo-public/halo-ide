@@ -5,21 +5,54 @@ import { saveSettings, type EditorSettings } from '../settingsPrefs'
 
 const LOCAL_OLLAMA = 'http://127.0.0.1:11434'
 const CLOUD_OLLAMA = 'https://ollama.com'
+const LOCAL_WIRE = 'http://127.0.0.1:41793/v1'
 
 interface Props {
   open: boolean
   settings: EditorSettings
   onChange: (settings: EditorSettings) => void
   onClose: () => void
+  appVersion: string
+  updateState: MiniCursorUpdateState | null
+  onCheckForUpdates: () => void
+  onInstallUpdate: () => void
 }
 
-export function SettingsModal({ open, settings, onChange, onClose }: Props) {
+function updateStatusText(state: MiniCursorUpdateState | null): string {
+  if (!state || state.status === 'disabled' || state.status === 'idle') {
+    return 'Updates are checked automatically in installed builds.'
+  }
+  if (state.status === 'checking') return 'Checking for updates…'
+  if (state.status === 'available') return `Version ${state.version} is available. Downloading…`
+  if (state.status === 'downloading') {
+    const pct = Math.round(state.percent ?? 0)
+    return `Downloading version ${state.version ?? ''} (${pct}%)`.trim()
+  }
+  if (state.status === 'downloaded') return `Version ${state.version} is ready to install.`
+  if (state.status === 'not-available') return 'You are on the latest version.'
+  if (state.status === 'error') return state.error || 'Could not check for updates.'
+  return ''
+}
+
+export function SettingsModal({
+  open,
+  settings,
+  onChange,
+  onClose,
+  appVersion,
+  updateState,
+  onCheckForUpdates,
+  onInstallUpdate,
+}: Props) {
   const [draft, setDraft] = useState(settings)
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [aiSettings, setAiSettings] = useState<AiSettings>({ providers: [] })
   const [credentials, setCredentials] = useState<CredentialsSettings>({ gitHubPat: '' })
   const [openAiKey, setOpenAiKey] = useState('')
   const [ollamaKey, setOllamaKey] = useState('')
+  const [wireBaseUrl, setWireBaseUrl] = useState('')
+  const [wireStatus, setWireStatus] = useState<string | null>(null)
+  const [detectingWire, setDetectingWire] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [savingCredentials, setSavingCredentials] = useState(false)
   const savedGitHubPat = useRef('')
@@ -33,19 +66,34 @@ export function SettingsModal({ open, settings, onChange, onClose }: Props) {
   useEffect(() => {
     if (!open) return
     Promise.all([api.listAiProviders(), api.getAiSettings(), api.getCredentials()])
-      .then(([nextProviders, nextSettings, nextCredentials]) => {
+      .then(async ([nextProviders, nextSettings, nextCredentials]) => {
         const pat = nextCredentials.gitHubPat ?? ''
         const openai = nextSettings.providers.find((p) => p.provider === 'openai')?.apiKey ?? ''
         const ollama = nextSettings.providers.find((p) => p.provider === 'ollama')?.apiKey ?? ''
+        const wire = nextSettings.providers.find((p) => p.provider === 'wire')?.baseUrl ?? ''
         setProviders(nextProviders)
         setAiSettings(nextSettings)
         setCredentials({ gitHubPat: pat })
         setOpenAiKey(openai)
         setOllamaKey(ollama)
+        setWireBaseUrl(wire)
         savedGitHubPat.current = pat
         savedOpenAiKey.current = openai
         savedOllamaKey.current = ollama
         setError(null)
+        if (!wire.trim()) {
+          try {
+            const detected = await api.detectAuraWire()
+            if (detected.baseUrl) setWireBaseUrl(detected.baseUrl)
+            setWireStatus(detected.message ?? null)
+            const refreshed = await api.getAiSettings()
+            setAiSettings(refreshed)
+          } catch (e) {
+            setWireStatus(e instanceof Error ? e.message : 'Could not detect Aura Wire.')
+          }
+        } else {
+          setWireStatus(null)
+        }
       })
       .catch((e: Error) => setError(e.message))
   }, [open])
@@ -109,6 +157,30 @@ export function SettingsModal({ open, settings, onChange, onClose }: Props) {
     updateProviderSetting('ollama', 'apiKey', value, extras)
   }
 
+  const saveWireBaseUrl = (value: string) => {
+    const trimmed = value.trim()
+    setWireBaseUrl(trimmed)
+    const current = aiSettings.providers.find((p) => p.provider === 'wire')?.baseUrl ?? ''
+    if (trimmed === current) return
+    updateProviderSetting('wire', 'baseUrl', trimmed)
+  }
+
+  const detectWire = async () => {
+    setDetectingWire(true)
+    setWireStatus(null)
+    try {
+      const detected = await api.detectAuraWire()
+      if (detected.baseUrl) setWireBaseUrl(detected.baseUrl)
+      setWireStatus(detected.message ?? null)
+      const refreshed = await api.getAiSettings()
+      setAiSettings(refreshed)
+    } catch (e) {
+      setWireStatus(e instanceof Error ? e.message : 'Could not detect Aura Wire.')
+    } finally {
+      setDetectingWire(false)
+    }
+  }
+
   const saveGitHubPat = (value: string) => {
     setCredentials({ gitHubPat: value })
     if (value === savedGitHubPat.current) return
@@ -126,7 +198,7 @@ export function SettingsModal({ open, settings, onChange, onClose }: Props) {
   }
 
   const otherProviders = providers.filter(
-    (provider) => provider.id !== 'openai' && provider.id !== 'ollama',
+    (provider) => provider.id !== 'openai' && provider.id !== 'ollama' && provider.id !== 'wire',
   )
   const ollamaSettings = aiSettings.providers.find((p) => p.provider === 'ollama')
 
@@ -190,6 +262,29 @@ export function SettingsModal({ open, settings, onChange, onClose }: Props) {
         </label>
 
         <div className="settings-section">
+          <h4>About</h4>
+          <div className="settings-row">
+            <span>Mini Cursor</span>
+            <span className="settings-about-version">v{appVersion}</span>
+          </div>
+          <p className="settings-update-status">{updateStatusText(updateState)}</p>
+          <div className="settings-actions">
+            <button
+              className="primary-btn"
+              disabled={!window.miniCursor?.checkForUpdates || updateState?.status === 'checking' || updateState?.status === 'downloading'}
+              onClick={() => onCheckForUpdates()}
+            >
+              Check for updates
+            </button>
+            {updateState?.status === 'downloaded' && (
+              <button className="primary-btn" onClick={() => onInstallUpdate()}>
+                Restart to update
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="settings-section">
           <h4>Credentials</h4>
           {error && <div className="error-text">{error}</div>}
           <label className="settings-row settings-row-stack">
@@ -239,6 +334,28 @@ export function SettingsModal({ open, settings, onChange, onClose }: Props) {
               onChange={(e) => updateProviderSetting('ollama', 'baseUrl', e.target.value)}
             />
           </label>
+          <div className="settings-row settings-row-stack">
+            <span>Aura Wire API</span>
+            <div className="settings-row-with-action">
+              <input
+                type="text"
+                spellCheck={false}
+                placeholder={LOCAL_WIRE}
+                value={wireBaseUrl}
+                onChange={(e) => setWireBaseUrl(e.target.value)}
+                onBlur={(e) => saveWireBaseUrl(e.target.value)}
+              />
+              <button
+                type="button"
+                className="primary-btn settings-detect-btn"
+                disabled={detectingWire}
+                onClick={() => void detectWire()}
+              >
+                {detectingWire ? 'Detecting…' : 'Detect'}
+              </button>
+            </div>
+          </div>
+          {wireStatus && <div className="settings-hint">{wireStatus}</div>}
         </div>
 
         <div className="settings-section">

@@ -13,6 +13,7 @@ public sealed class AiProviderService
     private const string OpenAiProvider = "openai";
     private const string ClaudeProvider = "claude";
     private const string OllamaProvider = "ollama";
+    private const string WireProvider = "wire";
 
     private static readonly JsonSerializerOptions SettingsJson = new()
     {
@@ -25,7 +26,8 @@ public sealed class AiProviderService
         new(CopilotProvider, "Copilot"),
         new(OpenAiProvider, "OpenAI", RequiresApiKey: true),
         new(ClaudeProvider, "Claude", RequiresApiKey: true),
-        new(OllamaProvider, "Ollama", RequiresApiKey: false)
+        new(OllamaProvider, "Ollama", RequiresApiKey: false),
+        new(WireProvider, "Aura Wire", RequiresApiKey: false)
     ];
 
     private static readonly string[] OpenAiModels =
@@ -48,19 +50,23 @@ public sealed class AiProviderService
 
     private readonly MiniCursorOptions _options;
     private readonly CopilotService _copilot;
+    private readonly AuraWireDetector _wire;
     private readonly ILogger<AiProviderService> _logger;
     private readonly string _settingsPath;
     private readonly HttpClient _httpClient = new();
     private AiSettingsRecord _settings;
+    private bool _wireAutoDetected;
 
     public AiProviderService(
         IOptions<MiniCursorOptions> options,
         IWebHostEnvironment env,
         CopilotService copilot,
+        AuraWireDetector wire,
         ILogger<AiProviderService> logger)
     {
         _options = options.Value;
         _copilot = copilot;
+        _wire = wire;
         _logger = logger;
 
         var dataDir = _options.DataDirectory;
@@ -72,14 +78,21 @@ public sealed class AiProviderService
         _settings = LoadSettings();
     }
 
-    public IReadOnlyList<ProviderOptionDto> ListProviders()
+    public async Task<IReadOnlyList<ProviderOptionDto>> ListProvidersAsync(CancellationToken cancellationToken = default)
     {
-        return ProviderOptions
-            .Select(option => option with
+        var list = new List<ProviderOptionDto>(ProviderOptions.Length);
+        foreach (var option in ProviderOptions)
+        {
+            if (option.Id == WireProvider && !await EnsureWireAvailableAsync(cancellationToken))
+                continue;
+
+            list.Add(option with
             {
                 Configured = !option.RequiresApiKey || HasApiKey(option.Id)
-            })
-            .ToList();
+            });
+        }
+
+        return list;
     }
 
     public async Task<IReadOnlyList<CopilotModelDto>> ListModelsAsync(string provider, CancellationToken cancellationToken = default)
@@ -90,6 +103,7 @@ public sealed class AiProviderService
                 .Select(m => m with { Provider = CopilotProvider })
                 .ToList(),
             OpenAiProvider => OpenAiModels.Select(m => new CopilotModelDto(m, m, OpenAiProvider)).ToList(),
+            WireProvider => OpenAiModels.Select(m => new CopilotModelDto(m, m, WireProvider)).ToList(),
             ClaudeProvider => ClaudeModels.Select(m => new CopilotModelDto(m, m, ClaudeProvider)).ToList(),
             OllamaProvider => await ListOllamaModelsAsync(cancellationToken),
             _ => throw new InvalidOperationException($"Unsupported provider '{provider}'.")
@@ -116,10 +130,14 @@ public sealed class AiProviderService
                 string.Equals(p.Provider, option.Id, StringComparison.OrdinalIgnoreCase));
 
             var current = GetProviderSettings(option.Id);
+            var baseUrl = incoming?.BaseUrl?.Trim() ?? current.BaseUrl;
+            if (option.Id == WireProvider)
+                baseUrl = AuraWireDetector.NormalizeBaseUrl(baseUrl) ?? baseUrl;
+
             mapped[option.Id] = new ProviderSettingsRecord
             {
                 ApiKey = incoming?.ApiKey?.Trim() ?? current.ApiKey,
-                BaseUrl = incoming?.BaseUrl?.Trim() ?? current.BaseUrl
+                BaseUrl = baseUrl
             };
         }
 
@@ -128,10 +146,50 @@ public sealed class AiProviderService
         return GetSettings();
     }
 
+    public async Task<AuraWireDetectDto> DetectWireAsync(bool persist, CancellationToken cancellationToken = default)
+    {
+        var configured = GetProviderSettings(WireProvider).BaseUrl;
+        var result = await _wire.DetectAsync(configured, cancellationToken);
+        if (persist && !string.IsNullOrWhiteSpace(result.BaseUrl))
+            SetWireBaseUrl(result.BaseUrl);
+
+        return new AuraWireDetectDto(result.Installed, result.Running, result.BaseUrl, result.Message);
+    }
+
     public bool HasApiKey(string provider)
     {
         var settings = GetProviderSettings(provider);
         return !string.IsNullOrWhiteSpace(settings.ApiKey);
+    }
+
+    public ProviderSettingsDto GetConnection(string provider)
+    {
+        var normalized = NormalizeProvider(provider);
+        var settings = GetProviderSettings(normalized);
+        var apiKey = settings.ApiKey?.Trim();
+        var baseUrl = settings.BaseUrl?.Trim().TrimEnd('/');
+
+        switch (normalized)
+        {
+            case OpenAiProvider:
+                baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? "https://api.openai.com/v1" : baseUrl;
+                break;
+            case WireProvider:
+                baseUrl = AuraWireDetector.NormalizeBaseUrl(baseUrl) ?? AuraWireDetector.DefaultBaseUrl;
+                if (string.IsNullOrWhiteSpace(apiKey))
+                    apiKey = GetProviderSettings(OpenAiProvider).ApiKey?.Trim();
+                if (string.IsNullOrWhiteSpace(apiKey))
+                    apiKey = "mini-cursor";
+                break;
+            case ClaudeProvider:
+                baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? "https://api.anthropic.com" : baseUrl;
+                break;
+            case OllamaProvider:
+                baseUrl = ResolveOllamaBaseUrl(settings);
+                break;
+        }
+
+        return new ProviderSettingsDto(normalized, apiKey, baseUrl);
     }
 
     public string NormalizeProvider(string? provider)
@@ -139,9 +197,48 @@ public sealed class AiProviderService
         var normalized = provider?.Trim().ToLowerInvariant();
         return normalized switch
         {
-            CopilotProvider or OpenAiProvider or ClaudeProvider or OllamaProvider => normalized,
+            CopilotProvider or OpenAiProvider or ClaudeProvider or OllamaProvider or WireProvider => normalized,
+            "aura-wire" or "aurawire" => WireProvider,
             _ => throw new InvalidOperationException($"Unsupported provider '{provider}'.")
         };
+    }
+
+    private async Task<bool> EnsureWireAvailableAsync(CancellationToken cancellationToken)
+    {
+        var current = AuraWireDetector.NormalizeBaseUrl(GetProviderSettings(WireProvider).BaseUrl);
+        if (current is not null && await _wire.IsApiRunningAsync(current, cancellationToken))
+            return true;
+
+        if (current is not null && _wireAutoDetected)
+            return false;
+
+        _wireAutoDetected = true;
+        var result = await _wire.DetectAsync(current, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(result.BaseUrl))
+            SetWireBaseUrl(result.BaseUrl);
+
+        return result.Running;
+    }
+
+    private void SetWireBaseUrl(string baseUrl)
+    {
+        var normalized = AuraWireDetector.NormalizeBaseUrl(baseUrl);
+        if (normalized is null)
+            return;
+
+        var current = GetProviderSettings(WireProvider);
+        if (string.Equals(current.BaseUrl, normalized, StringComparison.OrdinalIgnoreCase)
+            && _settings.Providers.ContainsKey(WireProvider))
+        {
+            return;
+        }
+
+        _settings.Providers[WireProvider] = new ProviderSettingsRecord
+        {
+            ApiKey = current.ApiKey,
+            BaseUrl = normalized
+        };
+        PersistSettings();
     }
 
     private ProviderSettingsRecord GetProviderSettings(string provider)

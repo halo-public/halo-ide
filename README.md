@@ -28,7 +28,7 @@ Open a folder, edit files, run launch configs and tasks, use a real PTY terminal
 - Extensions / plugins
 - Language Server Protocol / full IntelliSense
 - Debug Adapter Protocol (launch configs run; they do not attach a debugger)
-- Packaged builds for macOS or Linux (dev works; the portable exe script is Windows-only)
+- Packaged builds for macOS or Linux (dev works; Windows installer and portable exe scripts are win-x64 only)
 
 ## Prerequisites
 
@@ -69,7 +69,7 @@ cd backend
 dotnet run
 ```
 
-The API listens on `http://127.0.0.1:5154`. Pair it with `npm run dev` in `frontend/` if you want the Vite UI without Electron.
+The API listens on `http://127.0.0.1:45154`. Pair it with `npm run dev` in `frontend/` if you want the Vite UI without Electron.
 
 ## Build a portable exe
 
@@ -87,6 +87,78 @@ npm run electron:build
 ```
 
 The script publishes a self-contained win-x64 API, builds the renderer, and packages both with electron-builder.
+
+## Versioning
+
+The app version is `frontend/package.json` (currently `0.1.0`). The API project version is kept in sync.
+
+Patch releases (notes, tests, installer, git tag, GitHub Release):
+
+```powershell
+.\scripts\release.ps1
+.\scripts\release.ps1 -DryRun
+```
+
+Major or minor bump without cutting a release:
+
+```powershell
+.\scripts\bump.ps1 minor
+.\scripts\bump.ps1 major
+```
+
+Then run `.\scripts\release.ps1` — it will not bump again until that version is tagged.
+
+To stamp an exact version:
+
+```powershell
+.\scripts\set-version.ps1 0.2.0
+```
+
+## Build a Windows installer
+
+Produces `frontend/release/mini-cursor-setup-<version>.exe` plus `latest.yml` (the auto-update feed):
+
+```powershell
+.\scripts\build-installer.ps1
+.\scripts\build-installer.ps1 -Version 0.2.0
+```
+
+Or run the **Build Mini Cursor Installer** launch config. Same thing via npm:
+
+```powershell
+cd frontend
+npm run electron:installer
+```
+
+Installed builds check [GitHub Releases](https://github.com/halo-public/mini-cursor/releases) for updates on startup. Settings → About can check again, and the status bar offers **Restart to update** when a download is ready.
+
+## GitHub releases
+
+The **Release** workflow builds the Windows installer and publishes a GitHub Release (installer, blockmap, and `latest.yml` for auto-update). Merge the workflow to the default branch before the first tagged release.
+
+**Cut a release locally** (preferred). The script writes `CHANGELOG.md`, runs tests, patch-bumps if the current version is already tagged, builds the installer, tags `v<version>`, publishes the GitHub Release, and pushes:
+
+```powershell
+.\scripts\release.ps1
+```
+
+If you already bumped with `.\scripts\bump.ps1 minor`, `release.ps1` ships that version as-is.
+
+**Or tag by hand** and let CI build:
+
+```powershell
+.\scripts\set-version.ps1 0.2.0
+git add frontend/package.json frontend/package-lock.json backend/MiniCursor.Api.csproj CHANGELOG.md
+git commit -m "Release 0.2.0"
+git tag v0.2.0
+git push origin HEAD v0.2.0
+```
+
+**Or run it from the Actions tab:** Actions → Release → Run workflow, enter `0.2.0` (no `v`). That stamps the version on the selected branch, builds, and creates tag `v0.2.0` plus the GitHub Release.
+
+A version with a hyphen (`0.2.0-beta.1`) is published as a GitHub prerelease; installed apps ignore those until you ship a stable tag.
+
+CI also runs `.\scripts\test.ps1` on pull requests. Add backend tests under `tests/MiniCursor.Api.Tests/` and frontend tests next to the code as `*.test.ts`.
 
 ## Configuration
 
@@ -127,9 +199,16 @@ Chat history lives in `<workspace>/.mini-cursor/chats` and is retained for 3 day
 
 ```
 backend/            ASP.NET Core API (workspace, git, launch, tasks, terminal, chat)
+tests/               xUnit tests for the API
 frontend/            Electron + React + Monaco UI
 sample-workspace/    Default folder opened on first run
+scripts/release.ps1
+scripts/bump.ps1
+scripts/test.ps1
 scripts/build-exe.ps1
+scripts/build-installer.ps1
+scripts/publish-github-release.ps1
+scripts/set-version.ps1
 ```
 
 ## License

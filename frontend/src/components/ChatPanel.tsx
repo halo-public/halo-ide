@@ -96,11 +96,12 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
   const activeTurn = useMemo<ChatTurnIndicator | null>(() => {
     if (!chat) return null
     const running = liveToolCalls.find((t) => t.status === 'running') ?? liveToolCalls.find((t) => t.status === 'pending')
+    const providerName = providers.find((p) => p.id === provider)?.name ?? 'Assistant'
     if (running) return { actor: 'assistant', label: `Running ${running.name}`, chatTitle: chat.title }
-    if (streaming) return { actor: 'assistant', label: 'Copilot is thinking', chatTitle: chat.title }
-    if (sending) return { actor: 'user', label: 'Waiting for Copilot', chatTitle: chat.title }
+    if (streaming) return { actor: 'assistant', label: `${providerName} is thinking`, chatTitle: chat.title }
+    if (sending) return { actor: 'user', label: `Waiting for ${providerName}`, chatTitle: chat.title }
     return null
-  }, [chat, sending, streaming, liveToolCalls])
+  }, [chat, sending, streaming, liveToolCalls, provider, providers])
 
   const openChats = useMemo(() => {
     const byId = new Map(chats.map((c) => [c.id, c]))
@@ -140,6 +141,15 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     setModels(list)
     setModel((prev) => resolveModel(preferred, list, fallback || prev))
     return list
+  }
+
+  const refreshProviders = async () => {
+    try {
+      const nextProviders = await api.listAiProviders()
+      setProviders(nextProviders.length ? nextProviders : DEFAULT_PROVIDERS)
+    } catch {
+      // Keep the last known list if Wire (or another provider) cannot be probed.
+    }
   }
 
   const applyChatSelection = async (detail: { provider?: string | null; model?: string | null }) => {
@@ -349,7 +359,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
   }
 
   const newChat = async () => {
-    const created = await api.createChat()
+    const created = await api.createChat(undefined, provider, model)
     cacheChat(created)
     await refreshSummaries()
     const opened = ensureOpen(created.id)
@@ -569,14 +579,20 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
     let liveTools: ChatToolCall[] = []
 
     try {
-      await api.sendMessage(chatId, content, payload, (type, body) => {
-        if (type === 'user') {
+      await api.sendMessage(
+        chatId,
+        content,
+        payload,
+        (type, body) => {
+          if (type === 'user') {
           localMessages = [...localMessages, body as ChatMessage]
           setChatCache((prev) => ({
             ...prev,
             [chatId]: {
               ...(prev[chatId] ?? baseChat),
               id: chatId,
+              provider,
+              model,
               messages: localMessages,
             },
           }))
@@ -616,7 +632,9 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             streaming: '',
           })
         }
-      })
+      },
+        { provider, model },
+      )
       await refreshSummaries()
     } catch (e) {
       patchRuntime(chatId, { error: e instanceof Error ? e.message : 'Send failed', streaming: '' })
@@ -864,6 +882,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
                 className="model-select"
                 value={providers.some((p) => p.id === provider) ? provider : (providers[0]?.id ?? 'copilot')}
                 onChange={(e) => void changeProvider(e.target.value)}
+                onFocus={() => void refreshProviders()}
                 disabled={sending}
                 title="AI provider"
               >

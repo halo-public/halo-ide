@@ -48,6 +48,8 @@ export default function App() {
   const [importCursorOpen, setImportCursorOpen] = useState(false)
   const [reveal, setReveal] = useState<{ path: string; line: number; column?: number } | null>(null)
   const [chatTurn, setChatTurn] = useState<ChatTurnIndicator | null>(null)
+  const [appVersion, setAppVersion] = useState(__APP_VERSION__)
+  const [updateState, setUpdateState] = useState<MiniCursorUpdateState | null>(null)
   const layoutRef = useRef(layout)
   layoutRef.current = layout
   const tabsRef = useRef(tabs)
@@ -86,6 +88,22 @@ export default function App() {
 
   const persistLayout = useCallback(() => {
     saveLayout(layoutRef.current)
+  }, [])
+
+  const checkForUpdates = useCallback(() => {
+    void window.miniCursor?.checkForUpdates()
+  }, [])
+
+  const installUpdate = useCallback(() => {
+    void window.miniCursor?.installUpdate()
+  }, [])
+
+  useEffect(() => {
+    const shell = window.miniCursor
+    if (!shell?.getVersion) return
+    void shell.getVersion().then(setAppVersion)
+    void shell.getUpdateState?.().then(setUpdateState)
+    return shell.onUpdate?.(setUpdateState)
   }, [])
 
   const setDock = useCallback((key: 'documentsDock' | 'sidebarsDock' | 'bottomPanelDock', value: HorizontalDock) => {
@@ -235,10 +253,12 @@ export default function App() {
       { id: 'problems', label: 'Show Problems', run: () => { setPanelVisible(true); setBottomTab('problems') } },
       { id: 'togglePanel', label: 'Toggle Panel', run: () => setPanelVisible((v) => !v) },
       { id: 'settings', label: 'Open Settings', run: () => setSettingsOpen(true) },
+      { id: 'checkUpdates', label: 'Check for Updates', run: checkForUpdates },
+      { id: 'installUpdate', label: 'Restart to Update', run: installUpdate },
       { id: 'importCursorChats', label: 'Import Chats from Cursor…', run: () => setImportCursorOpen(true) },
       { id: 'explorer', label: 'Show Explorer', run: () => setActivity('files') },
     ],
-    [reopenClosed, saveAll],
+    [reopenClosed, saveAll, checkForUpdates, installUpdate],
   )
 
   useEffect(() => {
@@ -503,6 +523,9 @@ export default function App() {
         cursor={cursor}
         problemCount={problems.length}
         turnIndicator={chatTurn}
+        appVersion={appVersion}
+        updateState={updateState}
+        onInstallUpdate={installUpdate}
         onProblemsClick={() => {
           setPanelVisible(true)
           setBottomTab('problems')
@@ -521,6 +544,10 @@ export default function App() {
         settings={settings}
         onChange={setSettings}
         onClose={() => setSettingsOpen(false)}
+        appVersion={appVersion}
+        updateState={updateState}
+        onCheckForUpdates={checkForUpdates}
+        onInstallUpdate={installUpdate}
       />
     </div>
   )

@@ -4,13 +4,15 @@ const path = require('path')
 const { API_BASE, startApi, stopApi } = require('./backend.cjs')
 const { loadWindowState, sanitizeState, trackWindowState } = require('./window-state.cjs')
 const { getMostRecent, loadMru, rememberWorkspace } = require('./mru.cjs')
+const { setupAutoUpdate } = require('./updater.cjs')
 
 const isDev = !app.isPackaged
-const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173'
+const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:45173'
 const ICON_PATH = path.join(__dirname, '..', 'assets', 'icon.png')
 
 let mainWindow = null
 let isStopping = false
+let updater = null
 
 function userData() {
   return app.getPath('userData')
@@ -127,6 +129,14 @@ function registerIpc() {
   ipcMain.handle('workspace:getMru', () => loadMru(userData()))
 
   ipcMain.handle('workspace:remember', (_event, folder) => rememberWorkspace(userData(), folder))
+
+  ipcMain.handle('app:getVersion', () => app.getVersion())
+  ipcMain.handle('app:getUpdateState', () => updater?.getState() ?? {
+    status: 'disabled',
+    currentVersion: app.getVersion(),
+  })
+  ipcMain.handle('app:checkForUpdates', () => updater?.check() ?? null)
+  ipcMain.handle('app:installUpdate', () => updater?.install() ?? false)
 }
 
 async function shutdownAndQuit() {
@@ -137,6 +147,10 @@ async function shutdownAndQuit() {
   } catch {
     /* ignore */
   }
+  if (updater?.isDownloaded()) {
+    await updater.install()
+    return
+  }
   app.exit(0)
 }
 
@@ -146,6 +160,16 @@ app.whenReady().then(async () => {
   }
 
   registerIpc()
+
+  updater = setupAutoUpdate({
+    app,
+    dialog,
+    getMainWindow: () => mainWindow,
+    beforeInstall: async () => {
+      isStopping = true
+      await stopApi()
+    },
+  })
 
   try {
     console.log(`[mini-cursor] starting API at ${API_BASE}`)
@@ -165,6 +189,7 @@ app.whenReady().then(async () => {
   }
 
   await createWindow()
+  updater?.scheduleInitialCheck?.()
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow()

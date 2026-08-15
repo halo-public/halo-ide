@@ -17,7 +17,9 @@ builder.Services.AddSingleton<AppSecretsService>();
 builder.Services.AddSingleton<GitService>();
 builder.Services.AddSingleton<ChatStore>();
 builder.Services.AddSingleton<CopilotService>();
+builder.Services.AddSingleton<AuraWireDetector>();
 builder.Services.AddSingleton<AiProviderService>();
+builder.Services.AddSingleton<ProviderChatService>();
 builder.Services.AddSingleton<ChatService>();
 builder.Services.AddSingleton<CursorChatImportService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CopilotService>());
@@ -309,7 +311,21 @@ app.Map("/api/terminal", async (HttpContext http, TerminalService terminal) =>
 // --- Copilot ---
 app.MapGet("/api/copilot/status", (CopilotService copilot) => Results.Ok(copilot.GetStatus()));
 
-app.MapGet("/api/ai/providers", (AiProviderService providers) => Results.Ok(providers.ListProviders()));
+app.MapGet("/api/ai/providers", async (AiProviderService providers, CancellationToken ct) =>
+    Results.Ok(await providers.ListProvidersAsync(ct)));
+
+app.MapPost("/api/ai/wire/detect", async (AiProviderService providers, ILogger<Program> logger, HttpContext http, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await providers.DetectWireAsync(persist: true, ct));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Failed to detect Aura Wire");
+        return BadRequestError(http, "Aura Wire could not be detected.", "aura_wire_detect_failed");
+    }
+});
 
 app.MapGet("/api/ai/models", async (string provider, AiProviderService providers, ILogger<Program> logger, HttpContext http, CancellationToken ct) =>
 {
@@ -379,7 +395,7 @@ app.MapPut("/api/copilot/model", async (SetChatProviderModelRequest request, Cha
 app.MapGet("/api/chats", (ChatService chats) => Results.Ok(chats.List()));
 
 app.MapPost("/api/chats", (CreateChatRequest? request, ChatService chats) =>
-    Results.Ok(chats.Create(request?.Title)));
+    Results.Ok(chats.Create(request?.Title, request?.Provider, request?.Model)));
 
 app.MapGet("/api/chats/{id}", (string id, ChatService chats) =>
 {

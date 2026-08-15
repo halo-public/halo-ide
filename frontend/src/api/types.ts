@@ -172,6 +172,13 @@ export interface AiSettings {
   providers: ProviderSettings[]
 }
 
+export interface AuraWireDetectResult {
+  installed: boolean
+  running: boolean
+  baseUrl?: string | null
+  message?: string | null
+}
+
 export interface CredentialsSettings {
   gitHubPat?: string | null
 }
