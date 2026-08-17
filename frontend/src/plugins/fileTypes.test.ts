@@ -11,6 +11,7 @@ describe('detectLanguage', () => {
     expect(detectLanguage('src/app.tsx')).toBe('typescript')
     expect(detectLanguage('hello.js')).toBe('javascript')
     expect(detectLanguage('a.JSON')).toBe('json')
+    expect(detectLanguage('notes.markdown')).toBe('markdown')
     expect(detectLanguage('noext')).toBe('plaintext')
   })
 })

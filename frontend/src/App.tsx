@@ -11,6 +11,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { EditorArea, type EditorGroupId, type OpenTab } from './components/EditorArea'
 import { FileTree } from './components/FileTree'
 import { GitPanel } from './components/GitPanel'
+import { MarkdownPreview } from './components/MarkdownPreview'
 import { QuickOpen } from './components/QuickOpen'
 import { SearchPanel } from './components/SearchPanel'
 import { SettingsModal } from './components/SettingsModal'
@@ -846,13 +847,11 @@ export default function App() {
         'app-shell',
         panelVisible ? '' : 'panel-collapsed',
         chrome.toolbars.run ? '' : 'no-run-toolbar',
-        appMenu.isElectron ? '' : 'has-html-menu',
+        'has-html-menu',
       ].filter(Boolean).join(' ')}
       style={shellStyle}
     >
-      {!appMenu.isElectron && (
-        <AppMenuBar template={appMenu.template} onSelect={appMenu.runMenuItem} />
-      )}
+      <AppMenuBar template={appMenu.template} onSelect={appMenu.runMenuItem} />
       {chrome.toolbars.run && (
         <TitleBar
           workspace={workspace}
@@ -1087,6 +1086,10 @@ export default function App() {
         updateState={updateState}
         onCheckForUpdates={checkForUpdates}
         onInstallUpdate={installUpdate}
+      />
+      <MarkdownPreview
+        document={pluginHost.markdownPreview}
+        onClose={pluginHost.closeMarkdownPreview}
       />
     </div>
     </PluginHostContext.Provider>

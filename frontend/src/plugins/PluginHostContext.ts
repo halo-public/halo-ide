@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 import type { ContextMenuMatchInput } from './match'
 import type {
   ContextMenuContext,
+  MarkdownDocument,
   PluginRecord,
   RegisteredContextMenuItem,
   RegisteredLanguage,
@@ -20,6 +21,8 @@ export interface PluginHostValue {
     item: RegisteredContextMenuItem | RegisteredTitleItem,
     ctx: Omit<ContextMenuContext, 'workspaceRoot'>,
   ) => void
+  markdownPreview: MarkdownDocument | null
+  closeMarkdownPreview: () => void
   itemsFor: (input: ContextMenuMatchInput) => RegisteredContextMenuItem[]
   titleItemsFor: (input: ContextMenuMatchInput) => RegisteredTitleItem[]
 }
@@ -33,6 +36,8 @@ const emptyHost: PluginHostValue = {
   detectLanguage: () => 'plaintext',
   reload: () => undefined,
   runItem: () => undefined,
+  markdownPreview: null,
+  closeMarkdownPreview: () => undefined,
   itemsFor: () => [],
   titleItemsFor: () => [],
 }

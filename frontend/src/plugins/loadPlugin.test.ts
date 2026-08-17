@@ -13,6 +13,8 @@ describe('activatePluginSource', () => {
       registerLanguage: vi.fn(),
       log: vi.fn(),
       clipboard: { write: vi.fn() },
+      workspace: { readFile: vi.fn() },
+      showMarkdown: vi.fn(),
     } satisfies MiniPluginApi
 
     activatePluginSource(
@@ -41,6 +43,8 @@ describe('activatePluginSource', () => {
       registerLanguage: vi.fn(),
       log: vi.fn(),
       clipboard: { write: vi.fn() },
+      workspace: { readFile: vi.fn() },
+      showMarkdown: vi.fn(),
     } satisfies MiniPluginApi
 
     expect(() => activatePluginSource('const x = 1', api)).toThrow(/activate/)
@@ -52,7 +56,7 @@ describe('createPluginSession', () => {
     const session = createPluginSession(() => undefined)
     expect(session.plugins.some((p) => p.id === 'builtin')).toBe(true)
     expect(session.items.map((i) => i.id)).toEqual(
-      expect.arrayContaining(['copyPath', 'copyAbsolutePath', 'copyFileName']),
+      expect.arrayContaining(['copyPath', 'copyAbsolutePath', 'copyFileName', 'openMarkdownPreview']),
     )
   })
 
@@ -169,5 +173,83 @@ describe('createPluginSession', () => {
     const tree = session.titleItems.find((i) => i.id === 'tree')
     expect(ping?.locations).toEqual(['editor'])
     expect(tree?.locations).toEqual(['explorer'])
+  })
+
+  it('opens markdown preview from the builtin context menu', async () => {
+    const shown: { title?: string; content: string; path?: string }[] = []
+    const reads: string[] = []
+    const session = createPluginSession(() => undefined, {
+      readFile: async (path) => {
+        reads.push(path)
+        return { path, content: '# From disk' }
+      },
+      showMarkdown: (doc) => {
+        shown.push(doc)
+      },
+    })
+
+    const item = session.items.find((i) => i.id === 'openMarkdownPreview')
+    expect(item?.files).toEqual(['.md', '.markdown', 'markdown'])
+    expect(item?.target).toBe('file')
+
+    await item?.run({
+      location: 'explorer',
+      path: 'docs/README.md',
+      workspaceRoot: '/ws',
+      isDirectory: false,
+    })
+    expect(reads).toEqual(['docs/README.md'])
+    expect(shown).toEqual([
+      { title: 'README.md', content: '# From disk', path: 'docs/README.md' },
+    ])
+
+    shown.length = 0
+    reads.length = 0
+    await item?.run({
+      location: 'editor',
+      path: 'notes.md',
+      workspaceRoot: '/ws',
+      isDirectory: false,
+      content: '# Unsaved',
+    })
+    expect(reads).toEqual([])
+    expect(shown).toEqual([{ title: 'notes.md', content: '# Unsaved', path: 'notes.md' }])
+  })
+
+  it('lets workspace plugins display markdown', async () => {
+    const shown: { content: string }[] = []
+    const session = createPluginSession(() => undefined, {
+      readFile: async (path) => ({ path, content: 'hello' }),
+      showMarkdown: (doc) => {
+        shown.push(doc)
+      },
+    })
+    session.activateWorkspacePlugin({
+      id: 'md',
+      name: 'Markdown',
+      version: '1.0.0',
+      source: `
+        function activate(api) {
+          api.registerContextMenuItem({
+            id: 'show',
+            title: 'Show',
+            files: ['.md'],
+            run: async function (ctx) {
+              const file = await api.workspace.readFile(ctx.path)
+              api.showMarkdown({ title: 'Custom', content: file.content })
+            }
+          })
+        }
+      `,
+    })
+
+    const item = session.items.find((i) => i.id === 'show' && i.pluginId === 'md')
+    await item?.run({
+      location: 'explorer',
+      path: 'a.md',
+      workspaceRoot: '/ws',
+      isDirectory: false,
+    })
+    expect(shown).toEqual([{ title: 'Custom', content: 'hello' }])
   })
 })

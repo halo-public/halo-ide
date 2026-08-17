@@ -86,6 +86,22 @@ export function registerBuiltinPlugins(api: MiniPluginApi): void {
       await api.clipboard.write(fileName(ctx.path))
     },
   })
+
+  api.registerContextMenuItem({
+    id: 'openMarkdownPreview',
+    title: 'Open Markdown Preview',
+    locations: ['explorer', 'editor'],
+    target: 'file',
+    files: ['.md', '.markdown', 'markdown'],
+    run: async (ctx) => {
+      const content = ctx.content ?? (await api.workspace.readFile(ctx.path)).content
+      api.showMarkdown({
+        title: fileName(ctx.path),
+        content,
+        path: ctx.path,
+      })
+    },
+  })
 }
 
 export const builtinPluginMeta = {

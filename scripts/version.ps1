@@ -52,7 +52,7 @@ function Get-MiniCursorSemVerParts {
   param([Parameter(Mandatory = $true)][string]$Version)
 
   if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$') {
-§d264208
+    throw "Version must be semver, e.g. 0.1.0 or 0.2.0-beta.1"
   }
 
   return [pscustomobject]@{
@@ -121,6 +121,7 @@ function New-MiniCursorReleaseNotes {
   $lines = @(git @gitArgs 2>$null | Where-Object {
       $_ -and
       ($_ -notmatch '^-\s+Release\s+\d+\.\d+\.\d+') -and
+      ($_ -notmatch '^-\s+Save work before ') -and
       ($_ -notmatch '^-\s+Merge ')
     })
 
@@ -195,4 +196,77 @@ function Assert-MiniCursorGitClean {
   if ($status) {
     throw "Working tree is not clean. Commit or stash changes first.`n$status"
   }
+}
+
+function Get-MiniCursorGitDirty {
+  $status = @(git status --porcelain | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($status.Count -eq 0) { return @() }
+  return $status
+}
+
+function Get-MiniCursorOversizedStagedFiles {
+  param([int64]$MaxBytes = 10MB)
+
+  $files = @(git diff --cached --name-only --diff-filter=ACMR)
+  $over = @()
+  foreach ($file in $files) {
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+    $len = (Get-Item -LiteralPath $file).Length
+    if ($len -gt $MaxBytes) {
+      $over += [pscustomobject]@{ Path = $file; Bytes = $len }
+    }
+  }
+  return $over
+}
+
+function Save-MiniCursorPendingWork {
+  param(
+    [string]$Message = 'Save work before release',
+    [switch]$Push
+  )
+
+  $status = Get-MiniCursorGitDirty
+  if ($status.Count -eq 0) {
+    Write-Host 'Working tree is already clean.' -ForegroundColor Green
+    return $false
+  }
+
+  Write-Host '==> Committing pending work...' -ForegroundColor Cyan
+  Write-Host ($status -join "`n")
+
+  git add -A
+  if ($LASTEXITCODE -ne 0) { throw "git add failed with exit code $LASTEXITCODE" }
+
+  $over = @(Get-MiniCursorOversizedStagedFiles)
+  if ($over.Count -gt 0) {
+    foreach ($file in $over) {
+      git restore --staged -- $file.Path
+      if ($LASTEXITCODE -ne 0) { throw "git restore --staged failed for $($file.Path)" }
+    }
+    $list = ($over | ForEach-Object {
+        '{0:N1} MB  {1}' -f ($_.Bytes / 1MB), $_.Path
+      }) -join "`n"
+    throw "Refusing to commit files larger than 10 MB. Add them to .gitignore and retry.`n$list"
+  }
+
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  git diff --cached --quiet
+  $hasCommit = $LASTEXITCODE -ne 0
+  $ErrorActionPreference = $previous
+  if (-not $hasCommit) {
+    Write-Host 'Nothing staged after git add. Working tree left as-is.' -ForegroundColor Yellow
+    return $false
+  }
+
+  git commit -m $Message
+  if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE" }
+
+  if ($Push) {
+    Write-Host '==> Pushing pending work...' -ForegroundColor Cyan
+    git push origin HEAD
+    if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+  }
+
+  return $true
 }

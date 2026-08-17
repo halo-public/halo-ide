@@ -6,6 +6,7 @@ import { activatePluginSource } from './loadPlugin'
 import type {
   ContextMenuItemSpec,
   LanguageSpec,
+  MarkdownDocument,
   MiniPluginApi,
   PluginRecord,
   PluginSource,
@@ -13,6 +14,7 @@ import type {
   RegisteredLanguage,
   RegisteredTitleItem,
   TitleItemSpec,
+  WorkspaceFileContent,
 } from './types'
 
 const LOCATIONS = ['explorer', 'editor'] as const
@@ -68,7 +70,15 @@ function normalizeTitleItem(
   }
 }
 
-export function createPluginSession(log: (message: string) => void) {
+export interface PluginHostCapabilities {
+  readFile(path: string): Promise<WorkspaceFileContent>
+  showMarkdown(doc: MarkdownDocument): void
+}
+
+export function createPluginSession(
+  log: (message: string) => void,
+  host?: PluginHostCapabilities,
+) {
   const items: RegisteredContextMenuItem[] = []
   const titleItems: RegisteredTitleItem[] = []
   const languages: RegisteredLanguage[] = []
@@ -78,6 +88,16 @@ export function createPluginSession(log: (message: string) => void) {
     id: plugin.id,
     log: (message: string) => log(`[${plugin.name}] ${message}`),
     clipboard: { write: writeClipboard },
+    workspace: {
+      readFile(path: string) {
+        if (!host?.readFile) throw new Error('workspace.readFile is not available')
+        return host.readFile(path)
+      },
+    },
+    showMarkdown(doc) {
+      if (!host?.showMarkdown) throw new Error('showMarkdown is not available')
+      host.showMarkdown(doc)
+    },
     registerContextMenuItem(item) {
       items.push(normalizeItem(plugin.id, plugin.name, item))
     },

@@ -5,6 +5,7 @@
       "name": "Halo IDE",
       "type": "node",
       "request": "launch",
+      "preLaunchTask": "kill-halo-instances",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
@@ -24,7 +25,7 @@
       "name": "Release Halo IDE",
       "type": "node-terminal",
       "request": "launch",
-      "command": ".\\scripts\\release.ps1",
+      "command": ".\\scripts\\release.ps1 -Bump patch",
       "cwd": "${workspaceFolder}"
     },
     {

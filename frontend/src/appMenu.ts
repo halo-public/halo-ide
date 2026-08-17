@@ -57,14 +57,37 @@ export const SUBMENU_LABELS: Record<string, string> = {
 }
 
 const EDIT_ROLES: MenuTemplateItem[] = [
-  { role: 'undo' },
-  { role: 'redo' },
+  { role: 'undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z' },
+  { role: 'redo', label: 'Redo', accelerator: 'CmdOrCtrl+Y' },
   { type: 'separator' },
-  { role: 'cut' },
-  { role: 'copy' },
-  { role: 'paste' },
-  { role: 'selectAll' },
+  { role: 'cut', label: 'Cut', accelerator: 'CmdOrCtrl+X' },
+  { role: 'copy', label: 'Copy', accelerator: 'CmdOrCtrl+C' },
+  { role: 'paste', label: 'Paste', accelerator: 'CmdOrCtrl+V' },
+  { role: 'selectAll', label: 'Select All', accelerator: 'CmdOrCtrl+A' },
 ]
+
+const EDIT_ROLE_COMMANDS: Record<string, string> = {
+  undo: 'undo',
+  redo: 'redo',
+  cut: 'cut',
+  copy: 'copy',
+  paste: 'paste',
+  selectAll: 'selectAll',
+}
+
+export function executeMenuRole(role: string): void {
+  const host = typeof window === 'undefined' ? undefined : window
+  if (host?.miniCursor?.runMenuRole) {
+    host.miniCursor.runMenuRole(role)
+    return
+  }
+  if (role === 'quit') {
+    host?.close()
+    return
+  }
+  const command = EDIT_ROLE_COMMANDS[role]
+  if (command && typeof document !== 'undefined') document.execCommand(command)
+}
 
 export function acceleratorDetail(accelerator: string, platform = 'win32'): string {
   const isMac = platform === 'darwin'

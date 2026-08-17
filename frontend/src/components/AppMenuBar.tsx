@@ -84,15 +84,15 @@ function MenuPanel({
             </div>
           )
         }
-        const disabled = item.enabled === false || !!item.role
+        const disabled = item.enabled === false
         return (
           <button
-            key={`${item.id ?? item.label}-${index}`}
+            key={`${item.id ?? item.role ?? item.label}-${index}`}
             className="app-menubar-row"
             role="menuitem"
             disabled={disabled}
             onClick={() => {
-              if (!disabled && item.id) onSelect(item)
+              if (!disabled && (item.id || item.role)) onSelect(item)
             }}
           >
             <span className="app-menubar-check">{item.checked ? '✓' : ''}</span>

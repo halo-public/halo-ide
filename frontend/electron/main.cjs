@@ -4,7 +4,7 @@ const path = require('path')
 const { API_BASE, startApi, stopApi } = require('./backend.cjs')
 const { loadWindowState, sanitizeState, trackWindowState } = require('./window-state.cjs')
 const { getMostRecent, loadMru, rememberWorkspace } = require('./mru.cjs')
-const { installDefaultMenu, registerMenuIpc } = require('./menu.cjs')
+const { hideApplicationMenu, registerMenuIpc } = require('./menu.cjs')
 const { setupAutoUpdate } = require('./updater.cjs')
 
 const isDev = !app.isPackaged
@@ -87,7 +87,7 @@ async function createWindow() {
     title: 'Halo IDE',
     icon: ICON_PATH,
     show: false,
-    autoHideMenuBar: false,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -95,6 +95,8 @@ async function createWindow() {
       sandbox: true,
     },
   })
+  mainWindow.setMenuBarVisibility(false)
+  mainWindow.setMenu(null)
 
   const windowTracker = trackWindowState(mainWindow, userData())
 
@@ -163,7 +165,7 @@ app.whenReady().then(async () => {
   }
 
   registerIpc()
-  installDefaultMenu()
+  hideApplicationMenu()
 
   updater = setupAutoUpdate({
     app,

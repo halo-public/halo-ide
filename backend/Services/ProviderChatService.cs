@@ -33,35 +33,75 @@ public sealed class ProviderChatService
         _logger = logger;
     }
 
-    public async IAsyncEnumerable<string> StreamAsync(
+    public List<ProviderMessage> BuildTurn(IReadOnlyList<ChatMessageRecord> history)
+    {
+        var messages = new List<ProviderMessage>
+        {
+            new("system", ChatToolCatalog.SystemPrompt(_workspace.Root))
+        };
+
+        foreach (var message in history)
+        {
+            var role = message.Role?.Trim().ToLowerInvariant();
+            if (role == "user")
+            {
+                var content = ExpandContent(message);
+                if (!string.IsNullOrWhiteSpace(content))
+                    messages.Add(new ProviderMessage("user", content));
+                continue;
+            }
+
+            if (role != "assistant")
+                continue;
+
+            if (message.ToolCalls is { Count: > 0 })
+            {
+                var calls = message.ToolCalls
+                    .Select(call => new ProviderToolCall(
+                        string.IsNullOrWhiteSpace(call.Id) ? Guid.NewGuid().ToString("N") : call.Id,
+                        string.IsNullOrWhiteSpace(call.Name) ? "tool" : call.Name,
+                        call.Arguments ?? "{}"))
+                    .ToList();
+                messages.Add(new ProviderMessage("assistant", null, calls));
+                foreach (var call in message.ToolCalls)
+                {
+                    var result = call.Error ?? call.Result ?? "";
+                    messages.Add(new ProviderMessage("tool", result, ToolCallId: call.Id));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(message.Content))
+                messages.Add(new ProviderMessage("assistant", message.Content));
+        }
+
+        return messages;
+    }
+
+    public async IAsyncEnumerable<ProviderRoundEvent> StreamRoundAsync(
         string provider,
         string model,
-        IReadOnlyList<ChatMessageRecord> history,
+        IReadOnlyList<ProviderMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var normalized = _providers.NormalizeProvider(provider);
         var connection = _providers.GetConnection(normalized);
-        var messages = BuildMessages(history);
 
         var stream = normalized switch
         {
-            "openai" or "wire" => StreamOpenAiAsync(connection, model, messages, normalized == "wire", cancellationToken),
-            "claude" => StreamClaudeAsync(connection, model, messages, cancellationToken),
-            "ollama" => StreamOllamaAsync(connection, model, messages, cancellationToken),
+            "openai" or "wire" => StreamOpenAiRoundAsync(connection, model, messages, normalized == "wire", cancellationToken),
+            "claude" => StreamClaudeRoundAsync(connection, model, messages, cancellationToken),
+            "ollama" => StreamOllamaRoundAsync(connection, model, messages, cancellationToken),
             _ => throw new InvalidOperationException($"Chat for '{normalized}' is not supported.")
         };
 
-        await foreach (var delta in stream.WithCancellation(cancellationToken))
-        {
-            if (!string.IsNullOrEmpty(delta))
-                yield return delta;
-        }
+        await foreach (var evt in stream.WithCancellation(cancellationToken))
+            yield return evt;
     }
 
-    private async IAsyncEnumerable<string> StreamOpenAiAsync(
+    private async IAsyncEnumerable<ProviderRoundEvent> StreamOpenAiRoundAsync(
         ProviderSettingsDto connection,
         string model,
-        IReadOnlyList<Dictionary<string, string>> messages,
+        IReadOnlyList<ProviderMessage> messages,
         bool wire,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -79,22 +119,47 @@ public sealed class ProviderChatService
         if (wire)
             request.Headers.TryAddWithoutValidation("X-Aura-Wire-Ide", "mini-cursor");
 
-        request.Content = JsonContent(new
+        request.Content = JsonContent(new Dictionary<string, object?>
         {
-            model,
-            stream = true,
-            messages
+            ["model"] = model,
+            ["stream"] = true,
+            ["messages"] = ToOpenAiMessages(messages),
+            ["tools"] = ChatToolCatalog.OpenAiTools,
+            ["tool_choice"] = "auto"
         });
 
         using var response = await SendForStreamAsync(request, wire ? "Aura Wire" : "OpenAI", cancellationToken);
-        await foreach (var delta in ReadOpenAiSseAsync(response, cancellationToken))
-            yield return delta;
+        var acc = new OpenAiRoundAccumulator();
+        await foreach (var data in ReadSseDataAsync(response, cancellationToken))
+        {
+            if (data == "[DONE]")
+                break;
+
+            JsonElement root;
+            try
+            {
+                using var doc = JsonDocument.Parse(data);
+                root = doc.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            var applied = acc.Apply(root);
+            if (!string.IsNullOrEmpty(applied.TextDelta))
+                yield return ProviderRoundEvent.Delta(applied.TextDelta);
+            if (applied.ToolUpdate is not null)
+                yield return ProviderRoundEvent.ToolEvent(applied.ToolUpdate);
+        }
+
+        yield return ProviderRoundEvent.Complete(acc.CompletedToolCalls());
     }
 
-    private async IAsyncEnumerable<string> StreamClaudeAsync(
+    private async IAsyncEnumerable<ProviderRoundEvent> StreamClaudeRoundAsync(
         ProviderSettingsDto connection,
         string model,
-        IReadOnlyList<Dictionary<string, string>> messages,
+        IReadOnlyList<ProviderMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(connection.ApiKey))
@@ -109,23 +174,48 @@ public sealed class ProviderChatService
         request.Headers.TryAddWithoutValidation("x-api-key", connection.ApiKey.Trim());
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
-        request.Content = JsonContent(new
+        request.Content = JsonContent(new Dictionary<string, object?>
         {
-            model,
-            max_tokens = 8192,
-            stream = true,
-            messages
+            ["model"] = model,
+            ["max_tokens"] = 8192,
+            ["stream"] = true,
+            ["system"] = SystemContent(messages),
+            ["messages"] = ToClaudeMessages(messages),
+            ["tools"] = ChatToolCatalog.ClaudeTools
         });
 
         using var response = await SendForStreamAsync(request, "Claude", cancellationToken);
-        await foreach (var delta in ReadClaudeSseAsync(response, cancellationToken))
-            yield return delta;
+        var acc = new ClaudeRoundAccumulator();
+        await foreach (var data in ReadSseDataAsync(response, cancellationToken))
+        {
+            if (data == "[DONE]")
+                continue;
+
+            JsonElement root;
+            try
+            {
+                using var doc = JsonDocument.Parse(data);
+                root = doc.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            var applied = acc.Apply(root);
+            if (!string.IsNullOrEmpty(applied.TextDelta))
+                yield return ProviderRoundEvent.Delta(applied.TextDelta);
+            if (applied.ToolUpdate is not null)
+                yield return ProviderRoundEvent.ToolEvent(applied.ToolUpdate);
+        }
+
+        yield return ProviderRoundEvent.Complete(acc.CompletedToolCalls());
     }
 
-    private async IAsyncEnumerable<string> StreamOllamaAsync(
+    private async IAsyncEnumerable<ProviderRoundEvent> StreamOllamaRoundAsync(
         ProviderSettingsDto connection,
         string model,
-        IReadOnlyList<Dictionary<string, string>> messages,
+        IReadOnlyList<ProviderMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(connection.BaseUrl))
@@ -135,16 +225,44 @@ public sealed class ProviderChatService
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         if (!string.IsNullOrWhiteSpace(connection.ApiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.ApiKey.Trim());
-        request.Content = JsonContent(new
+        request.Content = JsonContent(new Dictionary<string, object?>
         {
-            model,
-            stream = true,
-            messages
+            ["model"] = model,
+            ["stream"] = true,
+            ["messages"] = ToOpenAiMessages(messages),
+            ["tools"] = ChatToolCatalog.OpenAiTools
         });
 
         using var response = await SendForStreamAsync(request, "Ollama", cancellationToken);
-        await foreach (var delta in ReadOllamaNdjsonAsync(response, cancellationToken))
-            yield return delta;
+        var acc = new OllamaRoundAccumulator();
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            JsonElement root;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                root = doc.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            var applied = acc.Apply(root);
+            if (!string.IsNullOrEmpty(applied.TextDelta))
+                yield return ProviderRoundEvent.Delta(applied.TextDelta);
+            if (applied.ToolUpdate is not null)
+                yield return ProviderRoundEvent.ToolEvent(applied.ToolUpdate);
+            if (acc.IsDone(root))
+                break;
+        }
+
+        yield return ProviderRoundEvent.Complete(acc.CompletedToolCalls());
     }
 
     private async Task<HttpResponseMessage> SendForStreamAsync(
@@ -175,6 +293,26 @@ public sealed class ProviderChatService
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         response.Dispose();
         throw new InvalidOperationException(FormatHttpError(label, status, body));
+    }
+
+    private static async IAsyncEnumerable<string> ReadSseDataAsync(
+        HttpResponseMessage response,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (line.Length == 0)
+                continue;
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var data = line[5..].Trim();
+            if (data.Length == 0)
+                continue;
+            yield return data;
+        }
     }
 
     private static string FormatHttpError(string label, int status, string body)
@@ -214,164 +352,186 @@ public sealed class ProviderChatService
         return trimmed.Length <= 280 ? trimmed : trimmed[..279] + "…";
     }
 
-    private static async IAsyncEnumerable<string> ReadOpenAiSseAsync(
-        HttpResponseMessage response,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static string SystemContent(IReadOnlyList<ProviderMessage> messages) =>
+        messages.FirstOrDefault(m => m.Role == "system")?.Content ?? ChatToolCatalog.SystemPrompt("");
+
+    private static List<Dictionary<string, object?>> ToOpenAiMessages(IReadOnlyList<ProviderMessage> messages)
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var reader = new StreamReader(stream);
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        var list = new List<Dictionary<string, object?>>();
+        foreach (var message in messages)
         {
-            if (line.Length == 0)
-                continue;
-            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var data = line[5..].Trim();
-            if (data.Length == 0 || data == "[DONE]")
-                yield break;
-
-            string? content = null;
-            try
+            if (message.Role == "assistant" && message.ToolCalls is { Count: > 0 })
             {
-                using var doc = JsonDocument.Parse(data);
-                if (doc.RootElement.TryGetProperty("choices", out var choices) &&
-                    choices.ValueKind == JsonValueKind.Array &&
-                    choices.GetArrayLength() > 0)
+                list.Add(new Dictionary<string, object?>
                 {
-                    var choice = choices[0];
-                    if (choice.TryGetProperty("delta", out var delta) &&
-                        delta.TryGetProperty("content", out var contentEl) &&
-                        contentEl.ValueKind == JsonValueKind.String)
+                    ["role"] = "assistant",
+                    ["content"] = string.IsNullOrWhiteSpace(message.Content) ? null : message.Content,
+                    ["tool_calls"] = message.ToolCalls.Select(call => new Dictionary<string, object?>
                     {
-                        content = contentEl.GetString();
-                    }
-                    else if (choice.TryGetProperty("message", out var message) &&
-                             message.TryGetProperty("content", out var messageContent) &&
-                             messageContent.ValueKind == JsonValueKind.String)
-                    {
-                        content = messageContent.GetString();
-                    }
-                }
-            }
-            catch (JsonException)
-            {
+                        ["id"] = call.Id,
+                        ["type"] = "function",
+                        ["function"] = new Dictionary<string, object?>
+                        {
+                            ["name"] = call.Name,
+                            ["arguments"] = string.IsNullOrWhiteSpace(call.Arguments) ? "{}" : call.Arguments
+                        }
+                    }).ToList()
+                });
                 continue;
             }
 
-            if (!string.IsNullOrEmpty(content))
-                yield return content;
+            if (message.Role == "tool")
+            {
+                list.Add(new Dictionary<string, object?>
+                {
+                    ["role"] = "tool",
+                    ["tool_call_id"] = message.ToolCallId ?? "",
+                    ["content"] = message.Content ?? ""
+                });
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(message.Content) && message.Role != "assistant")
+                continue;
+
+            list.Add(new Dictionary<string, object?>
+            {
+                ["role"] = message.Role,
+                ["content"] = message.Content ?? ""
+            });
         }
+
+        return list;
     }
 
-    private static async IAsyncEnumerable<string> ReadClaudeSseAsync(
-        HttpResponseMessage response,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+    private static List<Dictionary<string, object?>> ToClaudeMessages(IReadOnlyList<ProviderMessage> messages)
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var reader = new StreamReader(stream);
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        var list = new List<Dictionary<string, object?>>();
+        List<Dictionary<string, object?>>? pendingResults = null;
+
+        void AddUser(object content)
         {
-            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var data = line[5..].Trim();
-            if (data.Length == 0 || data == "[DONE]")
-                continue;
-
-            string? content = null;
-            try
+            if (list.Count > 0 &&
+                list[^1].TryGetValue("role", out var role) &&
+                role as string == "user")
             {
-                using var doc = JsonDocument.Parse(data);
-                var root = doc.RootElement;
-                var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : null;
-                if (type is "content_block_delta" &&
-                    root.TryGetProperty("delta", out var delta) &&
-                    delta.TryGetProperty("text", out var text) &&
-                    text.ValueKind == JsonValueKind.String)
-                {
-                    content = text.GetString();
-                }
-                else if (type is "error")
-                {
-                    var message = root.TryGetProperty("error", out var error) &&
-                                  error.TryGetProperty("message", out var errMessage)
-                        ? errMessage.GetString()
-                        : "Claude stream error";
-                    throw new InvalidOperationException(message ?? "Claude stream error");
-                }
-            }
-            catch (JsonException)
-            {
-                continue;
+                list[^1]["content"] = MergeClaudeUserContent(list[^1]["content"], content);
+                return;
             }
 
-            if (!string.IsNullOrEmpty(content))
-                yield return content;
-        }
-    }
-
-    private static async IAsyncEnumerable<string> ReadOllamaNdjsonAsync(
-        HttpResponseMessage response,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var reader = new StreamReader(stream);
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
-        {
-            if (string.IsNullOrWhiteSpace(line))
-                continue;
-
-            string? content = null;
-            var done = false;
-            try
+            list.Add(new Dictionary<string, object?>
             {
-                using var doc = JsonDocument.Parse(line);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("message", out var message) &&
-                    message.TryGetProperty("content", out var contentEl) &&
-                    contentEl.ValueKind == JsonValueKind.String)
-                {
-                    content = contentEl.GetString();
-                }
-
-                done = root.TryGetProperty("done", out var doneEl) && doneEl.ValueKind == JsonValueKind.True;
-                if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
-                    throw new InvalidOperationException(error.GetString() ?? "Ollama error");
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrEmpty(content))
-                yield return content;
-            if (done)
-                yield break;
-        }
-    }
-
-    private List<Dictionary<string, string>> BuildMessages(IReadOnlyList<ChatMessageRecord> history)
-    {
-        var messages = new List<Dictionary<string, string>>();
-        foreach (var message in history)
-        {
-            var role = message.Role?.Trim().ToLowerInvariant();
-            if (role is not ("user" or "assistant"))
-                continue;
-
-            var content = ExpandContent(message);
-            if (string.IsNullOrWhiteSpace(content))
-                continue;
-
-            messages.Add(new Dictionary<string, string>
-            {
-                ["role"] = role,
+                ["role"] = "user",
                 ["content"] = content
             });
         }
 
-        return messages;
+        void FlushResults()
+        {
+            if (pendingResults is not { Count: > 0 })
+                return;
+            AddUser(pendingResults);
+            pendingResults = null;
+        }
+
+        foreach (var message in messages)
+        {
+            if (message.Role == "system")
+                continue;
+
+            if (message.Role == "tool")
+            {
+                pendingResults ??= [];
+                pendingResults.Add(new Dictionary<string, object?>
+                {
+                    ["type"] = "tool_result",
+                    ["tool_use_id"] = message.ToolCallId ?? "",
+                    ["content"] = message.Content ?? ""
+                });
+                continue;
+            }
+
+            FlushResults();
+
+            if (message.Role == "assistant" && message.ToolCalls is { Count: > 0 })
+            {
+                var content = new List<Dictionary<string, object?>>();
+                if (!string.IsNullOrWhiteSpace(message.Content))
+                    content.Add(new Dictionary<string, object?> { ["type"] = "text", ["text"] = message.Content });
+
+                foreach (var call in message.ToolCalls)
+                {
+                    content.Add(new Dictionary<string, object?>
+                    {
+                        ["type"] = "tool_use",
+                        ["id"] = call.Id,
+                        ["name"] = call.Name,
+                        ["input"] = ParseToolInput(call.Arguments)
+                    });
+                }
+
+                list.Add(new Dictionary<string, object?>
+                {
+                    ["role"] = "assistant",
+                    ["content"] = content
+                });
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(message.Content))
+                continue;
+
+            if (message.Role == "user")
+            {
+                AddUser(message.Content!);
+                continue;
+            }
+
+            list.Add(new Dictionary<string, object?>
+            {
+                ["role"] = message.Role,
+                ["content"] = message.Content
+            });
+        }
+
+        FlushResults();
+        return list;
+    }
+
+    private static List<Dictionary<string, object?>> MergeClaudeUserContent(object? existing, object incoming)
+    {
+        var blocks = new List<Dictionary<string, object?>>();
+        AppendClaudeUserContent(blocks, existing);
+        AppendClaudeUserContent(blocks, incoming);
+        return blocks;
+    }
+
+    private static void AppendClaudeUserContent(List<Dictionary<string, object?>> blocks, object? content)
+    {
+        if (content is string text && !string.IsNullOrWhiteSpace(text))
+        {
+            blocks.Add(new Dictionary<string, object?> { ["type"] = "text", ["text"] = text });
+            return;
+        }
+
+        if (content is List<Dictionary<string, object?>> list)
+            blocks.AddRange(list);
+    }
+
+    private static object ParseToolInput(string? arguments)
+    {
+        if (string.IsNullOrWhiteSpace(arguments))
+            return new Dictionary<string, object?>();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(arguments);
+            return JsonSerializer.Deserialize<object>(doc.RootElement.GetRawText()) ?? new Dictionary<string, object?>();
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, object?> { ["raw"] = arguments };
+        }
     }
 
     private string ExpandContent(ChatMessageRecord message)

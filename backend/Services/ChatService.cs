@@ -13,6 +13,7 @@ public sealed class ChatService
     private readonly CopilotService _copilot;
     private readonly AiProviderService _providers;
     private readonly ProviderChatService _providerChat;
+    private readonly ChatToolExecutor _tools;
     private readonly WorkspaceService _workspace;
     private readonly ILogger<ChatService> _logger;
 
@@ -21,6 +22,7 @@ public sealed class ChatService
         CopilotService copilot,
         AiProviderService providers,
         ProviderChatService providerChat,
+        ChatToolExecutor tools,
         WorkspaceService workspace,
         ILogger<ChatService> logger)
     {
@@ -28,6 +30,7 @@ public sealed class ChatService
         _copilot = copilot;
         _providers = providers;
         _providerChat = providerChat;
+        _tools = tools;
         _workspace = workspace;
         _logger = logger;
     }
@@ -379,12 +382,69 @@ public sealed class ChatService
         CancellationToken cancellationToken)
     {
         var assistantBuffer = new StringBuilder();
+        var toolStates = new Dictionary<string, ChatToolCallDto>(StringComparer.Ordinal);
+        var turn = _providerChat.BuildTurn(chat.Messages);
+
         try
         {
-            await foreach (var delta in _providerChat.StreamAsync(provider, model, chat.Messages, cancellationToken))
+            for (var round = 0; round < ChatToolCatalog.MaxRounds; round++)
             {
-                assistantBuffer.Append(delta);
-                await writer.WriteAsync(ChatStreamEvent.Delta(delta), cancellationToken);
+                var roundCalls = Array.Empty<ProviderToolCall>();
+                var roundText = new StringBuilder();
+                await foreach (var evt in _providerChat.StreamRoundAsync(provider, model, turn, cancellationToken))
+                {
+                    if (evt.Kind == "delta" && !string.IsNullOrEmpty(evt.Text))
+                    {
+                        roundText.Append(evt.Text);
+                        assistantBuffer.Append(evt.Text);
+                        await writer.WriteAsync(ChatStreamEvent.Delta(evt.Text), cancellationToken);
+                    }
+                    else if (evt.Kind == "tool" && evt.Tool is not null)
+                    {
+                        toolStates[evt.Tool.Id] = evt.Tool;
+                        await writer.WriteAsync(ChatStreamEvent.Tool(evt.Tool), cancellationToken);
+                    }
+                    else if (evt.Kind == "complete")
+                    {
+                        roundCalls = (evt.CompletedToolCalls ?? []).ToArray();
+                    }
+                }
+
+                if (roundCalls.Length == 0)
+                    break;
+
+                if (round == ChatToolCatalog.MaxRounds - 1)
+                {
+                    assistantBuffer.Append("\n\n(Stopped after too many tool rounds.)");
+                    break;
+                }
+
+                turn.Add(new ProviderMessage(
+                    "assistant",
+                    roundText.Length == 0 ? null : roundText.ToString(),
+                    roundCalls));
+                foreach (var call in roundCalls)
+                {
+                    var running = new ChatToolCallDto(
+                        call.Id,
+                        call.Name,
+                        "running",
+                        Arguments: call.Arguments);
+                    toolStates[call.Id] = running;
+                    await writer.WriteAsync(ChatStreamEvent.Tool(running), cancellationToken);
+
+                    var result = await _tools.ExecuteAsync(call.Name, call.Arguments, cancellationToken);
+                    var finished = new ChatToolCallDto(
+                        call.Id,
+                        call.Name,
+                        result.Ok ? "complete" : "error",
+                        Arguments: call.Arguments,
+                        Result: result.Ok ? result.Content : null,
+                        Error: result.Ok ? null : result.Content);
+                    toolStates[call.Id] = finished;
+                    await writer.WriteAsync(ChatStreamEvent.Tool(finished), cancellationToken);
+                    turn.Add(new ProviderMessage("tool", result.Content, ToolCallId: call.Id));
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -401,7 +461,7 @@ public sealed class ChatService
         }
 
         var final = assistantBuffer.ToString();
-        if (string.IsNullOrWhiteSpace(final))
+        if (string.IsNullOrWhiteSpace(final) && toolStates.Count == 0)
             final = $"(No response from {provider})";
 
         var assistant = new ChatMessageRecord
@@ -409,7 +469,8 @@ public sealed class ChatService
             Id = Guid.NewGuid().ToString("N"),
             Role = "assistant",
             Content = final,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = DateTimeOffset.UtcNow,
+            ToolCalls = toolStates.Count == 0 ? null : toolStates.Values.ToList()
         };
         chat.Messages.Add(assistant);
         _store.Save(chat);

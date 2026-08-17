@@ -38,6 +38,19 @@
       "problemMatcher": []
     },
     {
+      "label": "release",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/scripts/release.ps1\" -Bump patch",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "build-installer",
       "type": "shell",
       "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/scripts/build-installer.ps1\"",
@@ -47,6 +60,21 @@
       "group": {
         "kind": "build",
         "isDefault": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "kill-halo-instances",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/scripts/kill-running.ps1\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
       },
       "problemMatcher": []
     },

@@ -1,20 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { CopilotModel } from '../api/types'
 import {
   CLOUD_OLLAMA,
   formatPullProgress,
   isLocalOllamaUrl,
-  loadOllamaUrlMru,
   LOCAL_OLLAMA,
   modelIsInstalled,
-  normalizeOllamaUrl,
-  ollamaUrlPresets,
   OLLAMA_RECOMMENDATIONS,
-  rememberOllamaUrl,
   type OllamaRecommendKind,
 } from '../ollamaModels'
+import { OllamaEndpointSelect } from './OllamaEndpointSelect'
 
 interface Props {
   apiKey: string
@@ -44,11 +40,7 @@ export function OllamaSettings({
   const [testing, setTesting] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [testOk, setTestOk] = useState<boolean | null>(null)
-  const [urlMru, setUrlMru] = useState<string[]>(() => loadOllamaUrlMru())
-  const [urlMenuOpen, setUrlMenuOpen] = useState(false)
-  const urlMenuRef = useRef<HTMLDivElement>(null)
   const local = isLocalOllamaUrl(baseUrl || (apiKey ? CLOUD_OLLAMA : LOCAL_OLLAMA))
-  const urlPresets = useMemo(() => ollamaUrlPresets(urlMru), [urlMru])
   const installedIds = useMemo(() => models.map((m) => m.id), [models])
   const model = selectedModel.trim()
 
@@ -72,23 +64,6 @@ export function OllamaSettings({
     // Reload when connection settings change; parent commits URL/key before this re-renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl, apiKey])
-
-  useEffect(() => {
-    if (!urlMenuOpen) return
-    const onPointer = (event: MouseEvent) => {
-      if (!urlMenuRef.current?.contains(event.target as Node)) setUrlMenuOpen(false)
-    }
-    window.addEventListener('mousedown', onPointer)
-    return () => window.removeEventListener('mousedown', onPointer)
-  }, [urlMenuOpen])
-
-  const applyBaseUrl = (url: string) => {
-    const next = normalizeOllamaUrl(url)
-    if (!next) return
-    onBaseUrlChange(next)
-    setUrlMru(rememberOllamaUrl(next))
-    setUrlMenuOpen(false)
-  }
 
   const pull = async () => {
     if (!model || pulling) return
@@ -153,58 +128,12 @@ export function OllamaSettings({
 
   return (
     <div id="settings-panel-ollama" role="tabpanel" aria-labelledby="settings-tab-ollama">
-      <label className="settings-row settings-row-stack">
-        <span>Base URL</span>
-        <div className="settings-row-with-action">
-          <input
-            type="text"
-            spellCheck={false}
-            placeholder={`${LOCAL_OLLAMA} or ${CLOUD_OLLAMA}`}
-            value={baseUrl}
-            onChange={(e) => onBaseUrlChange(e.target.value)}
-            onBlur={(e) => applyBaseUrl(e.target.value)}
-          />
-          <div className="mru-dropdown ollama-url-mru" ref={urlMenuRef}>
-            <div className="mru-trigger">
-              <button
-                type="button"
-                className="primary-btn mru-main settings-detect-btn"
-                title={`Use Ollama Cloud (${CLOUD_OLLAMA})`}
-                onClick={() => applyBaseUrl(CLOUD_OLLAMA)}
-              >
-                Cloud
-              </button>
-              <button
-                type="button"
-                className="primary-btn mru-chevron settings-detect-btn"
-                aria-label="Recent Ollama endpoints"
-                aria-expanded={urlMenuOpen}
-                onClick={() => setUrlMenuOpen((open) => !open)}
-              >
-                <ChevronDown size={14} />
-              </button>
-            </div>
-            {urlMenuOpen && (
-              <div className="mru-menu" role="menu">
-                {urlPresets.map((item) => (
-                  <button
-                    key={`${item.kind}:${item.url}`}
-                    type="button"
-                    className={`mru-item ${normalizeOllamaUrl(baseUrl).toLowerCase() === item.url.toLowerCase() ? 'active' : ''}`}
-                    role="menuitem"
-                    onClick={() => applyBaseUrl(item.url)}
-                  >
-                    <span className="mru-name">{item.label}</span>
-                    {item.kind !== 'recent' && <span className="mru-path">{item.url}</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </label>
+      <div className="settings-row settings-row-stack">
+        <span>Endpoint</span>
+        <OllamaEndpointSelect variant="field" value={baseUrl} onChange={onBaseUrlChange} />
+      </div>
       <div className="settings-hint">
-        Local Ollama defaults to {LOCAL_OLLAMA}. Use {CLOUD_OLLAMA} with an API key for hosted models.
+        Pick local Ollama, Ollama Cloud, or a recent host. Cloud needs an API key from ollama.com/settings/keys.
       </div>
       <label className="settings-row settings-row-stack">
         <span>API key</span>

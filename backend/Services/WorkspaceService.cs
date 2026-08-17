@@ -36,6 +36,14 @@ public sealed class WorkspaceService
         _ignore = new GitIgnoreMatcher(_root);
     }
 
+    internal WorkspaceService(string root)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        _root = Path.GetFullPath(root);
+        Directory.SetCurrentDirectory(_root);
+        _ignore = new GitIgnoreMatcher(_root);
+    }
+
     public string Root
     {
         get { lock (_gate) return _root; }

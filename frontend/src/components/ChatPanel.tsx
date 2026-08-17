@@ -837,11 +837,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             ))}
           </div>
         )}
-        {provider !== 'copilot' && chat && (
-          <div className="muted" style={{ fontSize: 11, padding: '0 8px 6px' }}>
-            Ask-only provider — it cannot edit files or run tools.
-          </div>
-        )}
         <div
           className={`composer-box${dragOver ? ' drag-over' : ''}`}
           onDragEnter={onDragEnter}
@@ -856,9 +851,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             placeholder={
               !chat
                 ? 'Open or create a chat…'
-                : provider === 'copilot'
-                  ? 'Message Copilot… (paste or drop images/files to attach)'
-                  : `Ask ${provider}… (text only — this provider cannot run tools)`
+                : `Message ${providers.find((p) => p.id === provider)?.name ?? provider}… (paste or drop images/files to attach)`
             }
             disabled={!chat}
             onChange={(e) => setInput(e.target.value)}

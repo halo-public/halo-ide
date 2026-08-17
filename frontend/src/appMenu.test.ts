@@ -62,10 +62,10 @@ describe('buildMenuTemplate', () => {
     expect(file.at(-1)).toMatchObject({ role: 'quit', label: 'Exit' })
   })
 
-  it('prepends native Edit roles and nests Appearance / Color Theme', () => {
+  it('prepends Edit roles and nests Appearance / Color Theme', () => {
     const template = buildMenuTemplate(commands)
     const edit = template[1]?.submenu ?? []
-    expect(edit[0]).toMatchObject({ role: 'undo' })
+    expect(edit[0]).toMatchObject({ role: 'undo', label: 'Undo', accelerator: 'CmdOrCtrl+Z' })
     expect(edit.some((item) => item.id === 'format')).toBe(true)
 
     const view = template[2]?.submenu ?? []

@@ -1,4 +1,5 @@
-# Cut a Halo IDE release: notes, tests, optional patch bump, installer, git tag, GitHub Release.
+# Cut a Halo IDE release: commit/push pending work, notes, tests, optional patch bump,
+# installer, git tag, GitHub Release.
 #
 # Default bump is patch only when the current version is already tagged.
 # After .\scripts\bump.ps1 major|minor, run this script to ship that version as-is.
@@ -9,6 +10,7 @@
 #   .\scripts\release.ps1 -DryRun
 #   .\scripts\release.ps1 -SkipBuild          # tag + push; CI builds the installer
 #   .\scripts\release.ps1 -NoPush
+#   .\scripts\release.ps1 -AllowDirty         # skip auto-commit of pending work
 
 [CmdletBinding()]
 param(
@@ -32,10 +34,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Frontend = Join-Path $Root 'frontend'
 Set-Location $Root
 
-if (-not $AllowDirty) {
-  Assert-MiniCursorGitClean
-}
-
 $current = Get-MiniCursorVersion -FrontendDir $Frontend
 $lastTag = Get-MiniCursorLatestVersionTag
 $tagged = Test-MiniCursorGitTagExists -Version $current
@@ -51,8 +49,26 @@ $version = if ($part -ne 'none') {
   $current
 }
 
+$pending = Get-MiniCursorGitDirty
+if ($DryRun) {
+  if ($pending.Count -gt 0) {
+    Write-Host 'Would commit and push pending work first:' -ForegroundColor Yellow
+    Write-Host ($pending -join "`n")
+    Write-Host ''
+  }
+}
+
 if (-not $DryRun -and (Test-MiniCursorGitTagExists -Version $version)) {
   throw "Git tag v$version already exists. Bump first (.\scripts\bump.ps1) or delete the tag."
+}
+
+if (-not $DryRun) {
+  if ($AllowDirty) {
+    Write-Host 'Skipping auto-commit of pending work (-AllowDirty).' -ForegroundColor Yellow
+  }
+  else {
+    Save-MiniCursorPendingWork -Message "Save work before $version" -Push:(-not $NoPush) | Out-Null
+  }
 }
 
 if ($Notes) {

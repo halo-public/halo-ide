@@ -16,10 +16,5 @@ contextBridge.exposeInMainWorld('miniCursor', {
     ipcRenderer.on('app:update', listener)
     return () => ipcRenderer.removeListener('app:update', listener)
   },
-  setApplicationMenu: (template) => ipcRenderer.send('menu:set', template),
-  onMenuCommand: (callback) => {
-    const listener = (_event, payload) => callback(payload)
-    ipcRenderer.on('menu:command', listener)
-    return () => ipcRenderer.removeListener('menu:command', listener)
-  },
+  runMenuRole: (role) => ipcRenderer.send('menu:role', role),
 })

@@ -1,45 +1,27 @@
-const { Menu, BrowserWindow } = require('electron')
+const { Menu, BrowserWindow, app } = require('electron')
 
-function send(id, data) {
-  const win = BrowserWindow.getFocusedWindow()
-  if (!win) return
-  win.webContents.send('menu:command', { id, data })
+const WEB_ROLES = new Set(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll'])
+
+function hideApplicationMenu() {
+  Menu.setApplicationMenu(null)
 }
 
-function hydrate(items) {
-  return (items || []).map((item) => {
-    const next = { ...item }
-    if (Array.isArray(next.submenu)) next.submenu = hydrate(next.submenu)
-    if (next.id && !next.role) {
-      const id = next.id
-      const data = next.data
-      next.click = () => send(id, data)
-    }
-    if (next.accelerator) next.registerAccelerator = false
-    delete next.data
-    return next
-  })
-}
-
-function applyMenu(template) {
-  const menu = Menu.buildFromTemplate(hydrate(template))
-  Menu.setApplicationMenu(menu)
-}
-
-function installDefaultMenu() {
-  applyMenu([
-    {
-      label: 'File',
-      submenu: [{ role: 'quit', label: 'Exit' }],
-    },
-  ])
+function runMenuRole(role, sender) {
+  if (role === 'quit') {
+    app.quit()
+    return
+  }
+  if (!WEB_ROLES.has(role)) return
+  const win = BrowserWindow.fromWebContents(sender) || BrowserWindow.getFocusedWindow()
+  const contents = win?.webContents
+  if (contents && typeof contents[role] === 'function') contents[role]()
 }
 
 function registerMenuIpc(ipcMain) {
-  ipcMain.on('menu:set', (_event, template) => {
-    if (!Array.isArray(template)) return
-    applyMenu(template)
+  ipcMain.on('menu:role', (event, role) => {
+    if (typeof role !== 'string') return
+    runMenuRole(role, event.sender)
   })
 }
 
-module.exports = { applyMenu, installDefaultMenu, registerMenuIpc }
+module.exports = { hideApplicationMenu, registerMenuIpc }

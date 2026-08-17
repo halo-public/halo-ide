@@ -23,7 +23,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/halo-public/mini-cursor.git"
+    "url": "https://github.com/halo-public/halo-ide.git"
   },
   "build": {
     "appId": "com.haloide.app",
@@ -88,6 +88,7 @@
     "@xterm/xterm": "^6.0.0",
     "electron-updater": "^6.7.3",
     "lucide-react": "^1.31.0",
+    "mermaid": "^11.16.1",
     "monaco-editor": "^0.56.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

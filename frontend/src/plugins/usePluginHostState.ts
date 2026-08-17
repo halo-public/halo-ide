@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { filterContextMenuItems, filterTitleItems, type ContextMenuMatchInput } from './match'
 import { detectLanguageFrom } from './languages'
-import { createPluginSession } from './session'
+import { createPluginSession, type PluginHostCapabilities } from './session'
 import type {
   ContextMenuContext,
+  MarkdownDocument,
   PluginRecord,
   RegisteredContextMenuItem,
   RegisteredLanguage,
@@ -19,11 +20,27 @@ export function usePluginHostState(
   const [titleItems, setTitleItems] = useState<RegisteredTitleItem[]>([])
   const [languages, setLanguages] = useState<RegisteredLanguage[]>([])
   const [plugins, setPlugins] = useState<PluginRecord[]>([])
+  const [markdownPreview, setMarkdownPreview] = useState<MarkdownDocument | null>(null)
   const [nonce, setNonce] = useState(0)
   const onLogRef = useRef(onLog)
   onLogRef.current = onLog
+  const hostRef = useRef<PluginHostCapabilities>({
+    readFile: async (path) => {
+      const file = await api.readFile(path)
+      return { path: file.path, content: file.content }
+    },
+    showMarkdown: () => undefined,
+  })
+  hostRef.current.showMarkdown = (doc) => {
+    setMarkdownPreview({
+      title: doc.title?.trim() || 'Markdown',
+      content: doc.content ?? '',
+      path: doc.path,
+    })
+  }
 
   const reload = useCallback(() => setNonce((n) => n + 1), [])
+  const closeMarkdownPreview = useCallback(() => setMarkdownPreview(null), [])
 
   useEffect(() => {
     let cancelled = false
@@ -32,7 +49,10 @@ export function usePluginHostState(
     }
 
     ;(async () => {
-      const session = createPluginSession(log)
+      const session = createPluginSession(log, {
+        readFile: (path) => hostRef.current.readFile(path),
+        showMarkdown: (doc) => hostRef.current.showMarkdown(doc),
+      })
       if (workspaceRoot) {
         try {
           const listed = await api.listPlugins()
@@ -59,6 +79,10 @@ export function usePluginHostState(
       cancelled = true
     }
   }, [workspaceRoot, nonce])
+
+  useEffect(() => {
+    setMarkdownPreview(null)
+  }, [workspaceRoot])
 
   const runItem = useCallback(
     (
@@ -93,10 +117,22 @@ export function usePluginHostState(
       detectLanguage,
       reload,
       runItem,
+      markdownPreview,
+      closeMarkdownPreview,
       itemsFor: (input: ContextMenuMatchInput) => filterContextMenuItems(items, input),
       titleItemsFor: (input: ContextMenuMatchInput) => filterTitleItems(titleItems, input),
     }),
-    [workspaceRoot, plugins, items, titleItems, languages, detectLanguage, reload, runItem],
+    [
+      workspaceRoot,
+      plugins,
+      items,
+      titleItems,
+      languages,
+      detectLanguage,
+      reload,
+      runItem,
+      markdownPreview,
+      closeMarkdownPreview,
+    ],
   )
 }
-

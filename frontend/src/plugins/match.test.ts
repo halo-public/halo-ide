@@ -83,6 +83,27 @@ describe('filterContextMenuItems', () => {
       ),
     ).toEqual(['all'])
   })
+
+  it('shows markdown-only items on markdown files', () => {
+    const items = [item({ id: 'md', title: 'Preview', target: 'file', files: ['.md', 'markdown'] })]
+
+    expect(
+      filterContextMenuItems(items, {
+        location: 'explorer',
+        path: 'README.md',
+        isDirectory: false,
+        language: 'markdown',
+      }).map((i) => i.id),
+    ).toEqual(['md'])
+    expect(
+      filterContextMenuItems(items, {
+        location: 'editor',
+        path: 'app.ts',
+        isDirectory: false,
+        language: 'typescript',
+      }).map((i) => i.id),
+    ).toEqual([])
+  })
 })
 
 describe('filterTitleItems', () => {

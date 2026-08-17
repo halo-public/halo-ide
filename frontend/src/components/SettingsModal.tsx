@@ -3,8 +3,9 @@ import { api } from '../api/client'
 import type { AiSettings, CredentialsSettings, ProviderOption } from '../api/types'
 import { saveSettings, type EditorSettings } from '../settingsPrefs'
 import { THEMES } from '../themes'
+import { OllamaEndpointSelect } from './OllamaEndpointSelect'
 import { OllamaSettings } from './OllamaSettings'
-import { CLOUD_OLLAMA, LOCAL_OLLAMA } from '../ollamaModels'
+import { CLOUD_OLLAMA, isLocalOllamaUrl, LOCAL_OLLAMA } from '../ollamaModels'
 
 const LOCAL_WIRE = 'http://127.0.0.1:41793/v1'
 
@@ -12,7 +13,7 @@ type SettingsTabId = 'editor' | 'ai' | 'ollama' | 'git' | 'about'
 
 const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
   { id: 'editor', label: 'Editor' },
-  { id: 'ai', label: 'AI' },
+  { id: 'ai', label: 'Account' },
   { id: 'ollama', label: 'Ollama' },
   { id: 'git', label: 'Git' },
   { id: 'about', label: 'About' },
@@ -218,6 +219,7 @@ export function SettingsModal({
     (provider) => provider.id !== 'openai' && provider.id !== 'ollama' && provider.id !== 'wire',
   )
   const ollamaSettings = aiSettings.providers.find((p) => p.provider === 'ollama')
+  const ollamaBaseUrl = ollamaSettings?.baseUrl ?? (ollamaKey ? CLOUD_OLLAMA : LOCAL_OLLAMA)
 
   const onTabsKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const index = SETTINGS_TABS.findIndex((tab) => tab.id === tabId)
@@ -370,6 +372,27 @@ export function SettingsModal({
                   onBlur={(e) => saveOpenAiKey(e.target.value)}
                 />
               </label>
+              <div className="settings-account-card">
+                <div className="settings-provider-title">
+                  <span>Ollama</span>
+                  <OllamaEndpointSelect
+                    value={ollamaBaseUrl}
+                    onChange={(url) => updateProviderSetting('ollama', 'baseUrl', url)}
+                  />
+                </div>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Paste API key"
+                  value={ollamaKey}
+                  onChange={(e) => setOllamaKey(e.target.value)}
+                  onBlur={(e) => saveOllamaKey(e.target.value)}
+                />
+                <div className="settings-account-status">
+                  {ollamaKey.trim() ? 'Configured' : isLocalOllamaUrl(ollamaBaseUrl) ? 'Local' : 'Not configured'}
+                </div>
+              </div>
               <div className="settings-row settings-row-stack">
                 <span>Aura Wire API</span>
                 <div className="settings-row-with-action">
@@ -429,7 +452,7 @@ export function SettingsModal({
           {tabId === 'ollama' && (
             <OllamaSettings
               apiKey={ollamaKey}
-              baseUrl={ollamaSettings?.baseUrl ?? (ollamaKey ? CLOUD_OLLAMA : LOCAL_OLLAMA)}
+              baseUrl={ollamaBaseUrl}
               selectedModel={ollamaModel}
               onApiKeyChange={setOllamaKey}
               onApiKeyCommit={saveOllamaKey}

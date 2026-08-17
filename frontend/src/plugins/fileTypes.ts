@@ -6,6 +6,7 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
   '.jsx': 'javascript',
   '.json': 'json',
   '.md': 'markdown',
+  '.markdown': 'markdown',
   '.css': 'css',
   '.html': 'html',
   '.htm': 'html',

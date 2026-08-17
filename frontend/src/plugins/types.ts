@@ -9,9 +9,22 @@ export interface ContextMenuContext {
   workspaceRoot: string
   isDirectory: boolean
   language?: string
+  /** Current editor buffer when the command ran from an open tab. */
+  content?: string
   selection?: string
   line?: number
   column?: number
+}
+
+export interface MarkdownDocument {
+  title?: string
+  content: string
+  path?: string
+}
+
+export interface WorkspaceFileContent {
+  path: string
+  content: string
 }
 
 export interface ContextMenuItemSpec {
@@ -71,6 +84,10 @@ export interface MiniPluginApi {
   clipboard: {
     write(text: string): Promise<void>
   }
+  workspace: {
+    readFile(path: string): Promise<WorkspaceFileContent>
+  }
+  showMarkdown(doc: MarkdownDocument): void
 }
 
 export interface RegisteredContextMenuItem {

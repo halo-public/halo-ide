@@ -8,6 +8,7 @@
 *.userosscache
 *.sln.docstates
 .mini-cursor/chats/
+**/.mini-cursor/chats/
 
 # Build results
 [Dd]ebug/
@@ -33,7 +34,7 @@ artifacts/
 backend/AppData/
 backend/publish/
 
-# Node
+# Node / Electron
 frontend/node_modules/
 frontend/dist/
 frontend/release/

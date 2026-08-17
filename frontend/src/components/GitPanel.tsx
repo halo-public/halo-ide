@@ -22,12 +22,61 @@ interface Props {
 
 const POLL_INTERVAL_MS = 500
 
-function statusLabel(file: GitStatusFile) {
-  if (file.stagedStatus !== 'unmodified' && file.worktreeStatus !== 'unmodified') return 'staged + unstaged'
-  if (file.stagedStatus !== 'unmodified') return 'staged'
-  if (file.worktreeStatus === 'untracked') return 'untracked'
-  if (file.worktreeStatus !== 'unmodified') return 'unstaged'
-  return 'clean'
+type StatusKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflict'
+
+interface StatusIndicator {
+  letter: string
+  kind: StatusKind
+  area: 'staged' | 'worktree'
+  title: string
+}
+
+function statusLetter(status: string): { letter: string; kind: StatusKind } | null {
+  switch (status) {
+    case 'unmodified':
+      return null
+    case 'modified':
+      return { letter: 'M', kind: 'modified' }
+    case 'added':
+      return { letter: 'A', kind: 'added' }
+    case 'deleted':
+      return { letter: 'D', kind: 'deleted' }
+    case 'renamed':
+      return { letter: 'R', kind: 'renamed' }
+    case 'copied':
+      return { letter: 'C', kind: 'copied' }
+    case 'untracked':
+      return { letter: 'U', kind: 'untracked' }
+    case 'updated':
+      return { letter: 'U', kind: 'conflict' }
+    default:
+      return status ? { letter: status[0]!.toUpperCase(), kind: 'modified' } : null
+  }
+}
+
+function fileStatusIndicators(file: GitStatusFile): StatusIndicator[] {
+  if (file.stagedStatus === 'untracked' || file.worktreeStatus === 'untracked') {
+    return [{ letter: 'U', kind: 'untracked', area: 'worktree', title: 'Untracked' }]
+  }
+
+  const indicators: StatusIndicator[] = []
+  const staged = statusLetter(file.stagedStatus)
+  const worktree = statusLetter(file.worktreeStatus)
+  if (staged) {
+    indicators.push({
+      ...staged,
+      area: 'staged',
+      title: `Staged ${file.stagedStatus}`,
+    })
+  }
+  if (worktree) {
+    indicators.push({
+      ...worktree,
+      area: 'worktree',
+      title: `Unstaged ${file.worktreeStatus}`,
+    })
+  }
+  return indicators
 }
 
 function branchGroup(branches: GitRef[], remote: boolean) {
@@ -169,6 +218,106 @@ export function GitPanel({ onOutput, refreshKey = 0, onOpenDiff, showToolbar = t
         )}
       </div>
 
+      <div className="git-collapsible-section git-section-changes">
+        <button
+          type="button"
+          className="git-section-toggle"
+          onClick={() => toggleSection('changes')}
+          aria-expanded={sectionsExpanded.changes}
+        >
+          <span className="git-section-toggle-icon">
+            {sectionsExpanded.changes ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span className="git-section-title">Changes</span>
+          </span>
+        </button>
+        {sectionsExpanded.changes && (
+          <div className="git-file-list">
+            {!status && !error && <div className="muted" style={{ padding: 8, fontSize: 12 }}>Loading Git status…</div>}
+            {status?.files.length === 0 && <div className="muted" style={{ padding: 8, fontSize: 12 }}>No changed files</div>}
+            {status?.files.map((file) => (
+              <label key={file.path} className={`git-file-item ${selectedSet.has(file.path) ? 'selected' : ''}`}>
+                <div className="git-file-top">
+                  <input
+                    type="checkbox"
+                    checked={selectedSet.has(file.path)}
+                    onChange={() => toggleSelection(file.path)}
+                  />
+                  <div
+                    className="git-file-path"
+                    role="button"
+                    title="Open diff vs HEAD"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      onOpenDiff?.(file.path)
+                    }}
+                  >
+                    {file.path}
+                  </div>
+                  <div className="git-file-state">
+                    {fileStatusIndicators(file).map((indicator) => (
+                      <span
+                        key={`${indicator.area}-${indicator.letter}`}
+                        className={`git-status-letter ${indicator.kind} ${indicator.area}`}
+                        title={indicator.title}
+                      >
+                        {indicator.letter}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="git-toolbar">
+        <button
+          className="primary-btn"
+          onClick={() => void runOperation('stage', undefined, selectedPaths)}
+          disabled={!canStage || busy || run?.status === 'running'}
+        >
+          <Check size={14} />
+          Stage
+        </button>
+        <button
+          className="primary-btn"
+          onClick={() => void runOperation('unstage', undefined, selectedPaths)}
+          disabled={!canUnstage || busy || run?.status === 'running'}
+        >
+          <Undo2 size={14} />
+          Unstage
+        </button>
+        <button
+          className="primary-btn"
+          onClick={() => void runOperation('discard', undefined, selectedPaths)}
+          disabled={!canDiscard || busy || run?.status === 'running'}
+        >
+          <RotateCcw size={14} />
+          Discard
+        </button>
+      </div>
+
+      <div className="git-commit-box">
+        <input
+          value={commitMessage}
+          placeholder="Commit message…"
+          onChange={(e) => setCommitMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && commitMessage.trim()) {
+              void runOperation('commit', commitMessage.trim())
+            }
+          }}
+        />
+        <button
+          className="primary-btn"
+          onClick={() => void runOperation('commit', commitMessage.trim())}
+          disabled={!commitMessage.trim() || busy || run?.status === 'running'}
+        >
+          Commit
+        </button>
+      </div>
+
       <div className="git-checkout-row">
         <input
           list="git-branches"
@@ -195,7 +344,7 @@ export function GitPanel({ onOutput, refreshKey = 0, onOpenDiff, showToolbar = t
         </datalist>
       </div>
 
-      <div className="git-collapsible-section">
+      <div className="git-collapsible-section git-section-branches">
         <button
           type="button"
           className="git-section-toggle"
@@ -272,100 +421,6 @@ export function GitPanel({ onOutput, refreshKey = 0, onOpenDiff, showToolbar = t
             </div>
           </div>
         )}
-      </div>
- 
-      <div className="git-collapsible-section">
-        <button
-          type="button"
-          className="git-section-toggle"
-          onClick={() => toggleSection('changes')}
-          aria-expanded={sectionsExpanded.changes}
-        >
-          <span className="git-section-toggle-icon">
-            {sectionsExpanded.changes ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            <span className="git-section-title">Changes</span>
-          </span>
-        </button>
-        {sectionsExpanded.changes && (
-          <div className="git-file-list">
-            {!status && !error && <div className="muted" style={{ padding: 8, fontSize: 12 }}>Loading Git status…</div>}
-            {status?.files.length === 0 && <div className="muted" style={{ padding: 8, fontSize: 12 }}>No changed files</div>}
-            {status?.files.map((file) => (
-              <label key={file.path} className={`git-file-item ${selectedSet.has(file.path) ? 'selected' : ''}`}>
-                <div className="git-file-top">
-                  <input
-                    type="checkbox"
-                    checked={selectedSet.has(file.path)}
-                    onChange={() => toggleSelection(file.path)}
-                  />
-                  <div
-                    className="git-file-path"
-                    role="button"
-                    title="Open diff vs HEAD"
-                    onClick={(e) => {
-                      e.preventDefault()
-                      onOpenDiff?.(file.path)
-                    }}
-                  >
-                    {file.path}
-                  </div>
-                </div>
-                <div className="git-file-state">
-                  <span>{statusLabel(file)}</span>
-                  <span>{file.stagedStatus}</span>
-                  <span>{file.worktreeStatus}</span>
-                </div>
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="git-toolbar">
-        <button
-          className="primary-btn"
-          onClick={() => void runOperation('stage', undefined, selectedPaths)}
-          disabled={!canStage || busy || run?.status === 'running'}
-        >
-          <Check size={14} />
-          Stage
-        </button>
-        <button
-          className="primary-btn"
-          onClick={() => void runOperation('unstage', undefined, selectedPaths)}
-          disabled={!canUnstage || busy || run?.status === 'running'}
-        >
-          <Undo2 size={14} />
-          Unstage
-        </button>
-        <button
-          className="primary-btn"
-          onClick={() => void runOperation('discard', undefined, selectedPaths)}
-          disabled={!canDiscard || busy || run?.status === 'running'}
-        >
-          <RotateCcw size={14} />
-          Discard
-        </button>
-      </div>
-
-      <div className="git-commit-box">
-        <input
-          value={commitMessage}
-          placeholder="Commit message…"
-          onChange={(e) => setCommitMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && commitMessage.trim()) {
-              void runOperation('commit', commitMessage.trim())
-            }
-          }}
-        />
-        <button
-          className="primary-btn"
-          onClick={() => void runOperation('commit', commitMessage.trim())}
-          disabled={!commitMessage.trim() || busy || run?.status === 'running'}
-        >
-          Commit
-        </button>
       </div>
 
       {error && <div className="error-text" style={{ padding: 8 }}>{error}</div>}

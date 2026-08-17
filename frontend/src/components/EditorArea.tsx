@@ -185,6 +185,7 @@ export function EditorArea({
               path: current.path,
               isDirectory: false,
               language: current.language,
+              content: model?.getValue() ?? current.content,
               selection: sel && model ? model.getValueInRange(sel) : '',
               line: editor.getPosition()?.lineNumber,
               column: editor.getPosition()?.column,
@@ -205,7 +206,6 @@ export function EditorArea({
     attachedRef.current.push(attached)
     bindPluginActions(attached)
     editor.onDidDispose(() => {
-§d263250
       attachedRef.current = attachedRef.current.filter((a) => a !== attached)
     })
   }
@@ -466,6 +466,7 @@ export function EditorArea({
                         path: focused.path,
                         isDirectory: false,
                         language: focused.language,
+                        content: focused.content,
                       })
                     }
                   >
@@ -535,6 +536,7 @@ export function EditorArea({
                 path: tabMenu.path,
                 isDirectory: false,
                 language: tabMenu.language,
+                content: tabs.find((t) => t.path === tabMenu.path)?.content,
               }),
           }) satisfies ContextMenuEntry)}
           onClose={() => setTabMenu(null)}

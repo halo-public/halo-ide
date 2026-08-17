@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/backend/">
-    <Project Path="backend/MiniCursor.Api.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/MiniCursor.Api.Tests/MiniCursor.Api.Tests.csproj" />
-  </Folder>
-</Solution>

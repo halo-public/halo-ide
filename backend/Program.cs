@@ -20,6 +20,8 @@ builder.Services.AddSingleton<CopilotService>();
 builder.Services.AddSingleton<AuraWireDetector>();
 builder.Services.AddSingleton<AiProviderService>();
 builder.Services.AddSingleton<ProviderChatService>();
+builder.Services.AddSingleton<WorkspaceProcessRunner>();
+builder.Services.AddSingleton<ChatToolExecutor>();
 builder.Services.AddSingleton<ChatService>();
 builder.Services.AddSingleton<CursorChatImportService>();
 builder.Services.AddSingleton<PluginService>();
