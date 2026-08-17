@@ -40,7 +40,7 @@
     {
       "label": "release",
       "type": "shell",
-      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/scripts/release.ps1\" -Bump patch",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"${workspaceFolder}/scripts/release.ps1\"",
       "options": {
         "cwd": "${workspaceFolder}"
       },

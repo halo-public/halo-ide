@@ -95,15 +95,54 @@ try {
   npm run build
   if ($LASTEXITCODE -ne 0) { throw "frontend build failed with exit code $LASTEXITCODE" }
 
+  Write-Host '==> Stopping running Halo IDE processes...' -ForegroundColor Cyan
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'kill-running.ps1')
+
+  # Pack outside the workspace so Cursor/VS Code file watchers cannot lock app.asar.
+  $packOut = Join-Path $env:TEMP "halo-ide-pack-$AppVersion"
+  if (Test-Path $packOut) {
+    Remove-Item -Recurse -Force $packOut
+  }
+
   Write-Host "==> Packaging Electron app ($Target)..." -ForegroundColor Cyan
-  npx electron-builder --win $Target --x64 --publish $publishArg
+  $packOutArg = $packOut.Replace('\', '/')
+  npx electron-builder --win $Target --x64 --publish $publishArg --config.directories.output=$packOutArg
   if ($LASTEXITCODE -ne 0) { throw "electron-builder failed with exit code $LASTEXITCODE" }
+
+  $ReleaseDir = Join-Path $Frontend 'release'
+  New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+  if ($Target -eq 'dir') {
+    $src = Join-Path $packOut 'win-unpacked'
+    if (-not (Test-Path $src)) { throw "Build finished but unpacked app not found at $src" }
+    $dst = Join-Path $ReleaseDir 'win-unpacked'
+    if (Test-Path $dst) {
+      try {
+        Remove-Item -LiteralPath $dst -Recurse -Force
+      }
+      catch {
+        Write-Host "Could not replace $dst (file in use). Leaving unpacked build at $src" -ForegroundColor Yellow
+        $ReleaseDir = $packOut
+      }
+    }
+    if ($ReleaseDir -eq (Join-Path $Frontend 'release')) {
+      Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force
+    }
+  }
+  else {
+    foreach ($name in @(
+        "mini-cursor-setup-$AppVersion.exe",
+        "mini-cursor-setup-$AppVersion.exe.blockmap",
+        'latest.yml'
+      )) {
+      $from = Join-Path $packOut $name
+      if (-not (Test-Path $from)) { throw "Build finished but missing $from" }
+      Copy-Item -LiteralPath $from -Destination (Join-Path $ReleaseDir $name) -Force
+    }
+  }
 }
 finally {
   Pop-Location
 }
-
-$ReleaseDir = Join-Path $Frontend 'release'
 if ($Target -eq 'dir') {
   $exe = Join-Path $ReleaseDir 'win-unpacked\Halo IDE.exe'
   if (-not (Test-Path $exe)) {
