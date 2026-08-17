@@ -11,7 +11,39 @@ export type OllamaUrlPreset = {
 }
 
 export function normalizeOllamaUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '')
+  const trimmed = url.trim()
+  if (!trimmed) return ''
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
+  try {
+    const parsed = new URL(withScheme)
+    if (parsed.hostname.toLowerCase() === 'ollama.com' && parsed.protocol === 'http:') {
+      parsed.protocol = 'https:'
+    }
+    const path = parsed.pathname.replace(/\/+$/, '')
+    return path && path !== '/' ? `${parsed.origin}${path}` : parsed.origin
+  } catch {
+    return trimmed.replace(/\/+$/, '')
+  }
+}
+
+export function formatOllamaHost(url: string): string {
+  const full = normalizeOllamaUrl(url) || LOCAL_OLLAMA
+  try {
+    const parsed = new URL(full)
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
+  } catch {
+    return full.replace(/^https?:\/\//i, '')
+  }
+}
+
+export function isCloudOllamaUrl(baseUrl: string | null | undefined): boolean {
+  const value = normalizeOllamaUrl(baseUrl ?? '')
+  if (!value) return false
+  try {
+    return new URL(value).hostname.toLowerCase() === 'ollama.com'
+  } catch {
+    return value.toLowerCase().includes('ollama.com')
+  }
 }
 
 export function loadOllamaUrlMru(): string[] {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatOllamaHost,
   formatPullProgress,
+  isCloudOllamaUrl,
   isLocalOllamaUrl,
   modelIsInstalled,
   normalizeOllamaUrl,
@@ -40,7 +42,21 @@ describe('ollama helpers', () => {
     expect(presets.filter((p) => p.url === 'https://ollama.com')).toHaveLength(1)
   })
 
-  it('strips trailing slashes from Ollama URLs', () => {
+  it('normalizes Ollama URLs with scheme, host-only input, and cloud https', () => {
     expect(normalizeOllamaUrl('https://ollama.com/')).toBe('https://ollama.com')
+    expect(normalizeOllamaUrl('127.0.0.1:11434')).toBe('http://127.0.0.1:11434')
+    expect(normalizeOllamaUrl('ollama.com')).toBe('https://ollama.com')
+    expect(normalizeOllamaUrl('http://ollama.com')).toBe('https://ollama.com')
+  })
+
+  it('formats compact host labels for the endpoint dropdown', () => {
+    expect(formatOllamaHost('http://127.0.0.1:11434')).toBe('127.0.0.1:11434')
+    expect(formatOllamaHost('https://ollama.com/')).toBe('ollama.com')
+    expect(formatOllamaHost('')).toBe('127.0.0.1:11434')
+  })
+
+  it('recognizes Ollama Cloud hosts', () => {
+    expect(isCloudOllamaUrl('https://ollama.com')).toBe(true)
+    expect(isCloudOllamaUrl('http://127.0.0.1:11434')).toBe(false)
   })
 })
