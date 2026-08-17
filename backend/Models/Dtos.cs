@@ -25,6 +25,20 @@ public sealed record CopyPathRequest(string Path, string NewPath);
 
 public sealed record SearchMatchDto(string Path, int Line, int Column, string Preview);
 
+public sealed record SearchReplaceRequest(
+    string Query,
+    string Replacement,
+    bool Gitignore = true,
+    bool Regex = false,
+    bool MatchCase = false,
+    string? Include = null,
+    string? Exclude = null);
+
+public sealed record SearchReplaceResultDto(
+    int FileCount,
+    int ReplacementCount,
+    IReadOnlyList<string> Paths);
+
 public sealed record GitStatusFileDto(
     string Path,
     string StagedStatus,
@@ -65,7 +79,8 @@ public sealed record LaunchConfigDto(
     string? Program,
     string? Cwd,
     IReadOnlyList<string>? Args,
-    IDictionary<string, string>? Env);
+    IDictionary<string, string>? Env,
+    string? PreLaunchTask = null);
 
 public sealed record LaunchRunDto(
     string Id,
@@ -158,7 +173,23 @@ public sealed record ProviderOptionDto(
 public sealed record ProviderSettingsDto(
     string Provider,
     string? ApiKey = null,
-    string? BaseUrl = null);
+    string? BaseUrl = null,
+    string? Model = null);
+
+public sealed record OllamaModelRequest(string Model);
+
+public sealed record OllamaPullEventDto(
+    string? Status = null,
+    string? Error = null,
+    long? Total = null,
+    long? Completed = null,
+    string? Digest = null);
+
+public sealed record OllamaTestResultDto(
+    bool Ok,
+    string? Reply = null,
+    string? Message = null,
+    int ElapsedMs = 0);
 
 public sealed record AiSettingsDto(IReadOnlyList<ProviderSettingsDto> Providers);
 
@@ -188,3 +219,23 @@ public sealed record CursorChatImportCandidateDto(
     string? Mode = null);
 
 public sealed record ImportCursorChatsRequest(IReadOnlyList<string> Ids);
+
+public sealed record PluginInfoDto(
+    string Id,
+    string Name,
+    string Version,
+    string Main,
+    string Path);
+
+public sealed record PluginSourceDto(
+    string Id,
+    string Name,
+    string Version,
+    string Main,
+    string Source);
+
+public sealed record WorkspaceWatchEventDto(
+    string Type,
+    string Path,
+    bool IsDirectory,
+    string? OldPath = null);

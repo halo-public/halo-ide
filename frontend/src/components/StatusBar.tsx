@@ -1,4 +1,4 @@
-import type { EditorCursor } from '../api/types'
+import type { CopilotStatus, EditorCursor } from '../api/types'
 import type { ChatTurnIndicator } from './ChatPanel'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   appVersion?: string
   updateState?: MiniCursorUpdateState | null
   onInstallUpdate?: () => void
+  copilotStatus?: CopilotStatus | null
 }
 
 export function StatusBar({
@@ -25,6 +26,7 @@ export function StatusBar({
   appVersion,
   updateState,
   onInstallUpdate,
+  copilotStatus,
 }: Props) {
   return (
     <footer className="status-bar">
@@ -38,6 +40,12 @@ export function StatusBar({
         </span>
       )}
       <div className="status-spacer" />
+      {copilotStatus && (
+        <span className="status-item" title={copilotStatus.message ?? ''}>
+          <span className={`status-dot ${copilotStatus.connected ? 'on' : 'off'}`} />
+          Copilot {copilotStatus.connected ? 'connected' : 'offline'}
+        </span>
+      )}
       {dirty != null && (
         <span className="status-item">{dirty ? 'Unsaved' : 'Saved'}</span>
       )}

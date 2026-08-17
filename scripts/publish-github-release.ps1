@@ -66,7 +66,7 @@ if ($exists) {
   gh release upload $tag @files --clobber
   if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
   if ($NotesFile) {
-    gh release edit $tag --title "Mini Cursor $Version" @noteArgs
+    gh release edit $tag --title "Halo IDE $Version" @noteArgs
     if ($LASTEXITCODE -ne 0) { throw "gh release edit failed with exit code $LASTEXITCODE" }
   }
 }
@@ -74,7 +74,7 @@ else {
   Write-Host "==> Creating GitHub Release $tag..." -ForegroundColor Cyan
   $ghArgs = @(
     'release', 'create', $tag,
-    '--title', "Mini Cursor $Version"
+    '--title', "Halo IDE $Version"
   )
   $ghArgs += $noteArgs
   if ($prerelease) { $ghArgs += '--prerelease' }

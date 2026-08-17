@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fuzzyFilter } from '../editorUtils'
+import type { AppCommand } from '../appMenu'
 
-export type Command = {
-  id: string
-  label: string
-  detail?: string
-  run: () => void
-}
+export type Command = AppCommand
 
 interface Props {
   open: boolean

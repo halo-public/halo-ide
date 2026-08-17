@@ -1,0 +1,19 @@
+{
+  "id": "cb597132a78744d08951e0eb89288df2",
+  "title": "test",
+  "createdAt": "2026-08-16T03:47:03.7450889+00:00",
+  "updatedAt": "2026-08-16T03:47:09.1723479+00:00",
+  "copilotSessionId": null,
+  "provider": "wire",
+  "model": "gpt-5",
+  "messages": [
+    {
+      "id": "c386ae8c04294effbaced1bf71f36495",
+      "role": "user",
+      "content": "test",
+      "createdAt": "2026-08-16T03:47:09.1723451+00:00",
+      "attachments": null,
+      "toolCalls": null
+    }
+  ]
+}

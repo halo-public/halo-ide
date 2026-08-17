@@ -1,0 +1,35 @@
+{
+  "id": "b73575ec22644b039b0ffe3dc40e6778",
+  "title": "test",
+  "createdAt": "2026-08-16T03:33:00.7450697+00:00",
+  "updatedAt": "2026-08-16T03:35:52.0070254+00:00",
+  "copilotSessionId": null,
+  "provider": "wire",
+  "model": "gpt-5",
+  "messages": [
+    {
+      "id": "08eb3bcdae0e4d49ad26fc954578cd6a",
+      "role": "user",
+      "content": "test",
+      "createdAt": "2026-08-16T03:34:21.7885734+00:00",
+      "attachments": null,
+      "toolCalls": null
+    },
+    {
+      "id": "54a5b66f3fa745219661a27970e831af",
+      "role": "user",
+      "content": "test",
+      "createdAt": "2026-08-16T03:35:37.3597116+00:00",
+      "attachments": null,
+      "toolCalls": null
+    },
+    {
+      "id": "edebedf9624c46cb99158d77439ebe76",
+      "role": "assistant",
+      "content": "Do you mean the section sign (\u00A7) or a citation like \u201CSection 0\u201D?  \nWhat\u2019s the context (law, code, typesetting, keyboard)?",
+      "createdAt": "2026-08-16T03:35:52.0070246+00:00",
+      "attachments": null,
+      "toolCalls": null
+    }
+  ]
+}

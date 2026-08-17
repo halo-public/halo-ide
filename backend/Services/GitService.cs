@@ -42,6 +42,24 @@ public sealed class GitService
         return new GitSidebarDto(status, branches);
     }
 
+    public FileContentDto GetHeadFile(string path)
+    {
+        EnsureGitRepository();
+        var rel = path.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrWhiteSpace(rel))
+            throw new InvalidOperationException("A file path is required.");
+
+        try
+        {
+            var content = RunGit("show " + QuoteArgument($"HEAD:{rel}"));
+            return new FileContentDto(rel, content, WorkspaceService.DetectLanguage(rel));
+        }
+        catch (InvalidOperationException)
+        {
+            return new FileContentDto(rel, "", WorkspaceService.DetectLanguage(rel));
+        }
+    }
+
     public GitStatusDto GetStatus()
     {
         EnsureGitRepository();

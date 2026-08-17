@@ -1,4 +1,4 @@
-# Mini Cursor
+# Halo IDE
 
 A minimal Cursor/VS Code–style IDE as an **Electron** app: React + Monaco on the front, ASP.NET Core on the back.
 
@@ -7,6 +7,7 @@ Open a folder, edit files, run launch configs and tasks, use a real PTY terminal
 ## Features
 
 - Native Electron shell with a Cursor-inspired dark UI
+- Application menu (File, Edit, View, Go, Run, Terminal, Help); toolbars are hidable
 - Backend starts and stops with the window
 - Open any folder as the workspace (recent folders remembered)
 - File explorer: create, rename, delete, copy/paste; optional `.gitignore` filtering
@@ -22,10 +23,11 @@ Open a folder, edit files, run launch configs and tasks, use a real PTY terminal
 - Git sidebar: status, branches, stage/unstage/discard, commit, fetch/pull/push
 - AI chat with session tabs (close hides, X deletes), 3-day history, streaming replies, and file/image attachments
 - Import chats from a local Cursor install
+- Mini plugins: workspace scripts that add context-menu items, editor/explorer title buttons, and syntax coloring
 
 ## Not included
 
-- Extensions / plugins
+- VS Code / Open VSX extensions
 - Language Server Protocol / full IntelliSense
 - Debug Adapter Protocol (launch configs run; they do not attach a debugger)
 - Packaged builds for macOS or Linux (dev works; Windows installer and portable exe scripts are win-x64 only)
@@ -44,11 +46,11 @@ For AI chat, configure at least one provider in **Settings**:
 | GitHub Copilot | Copilot subscription, plus Copilot CLI auth (`gh auth login`) **or** a GitHub PAT |
 | OpenAI | API key |
 | Claude | API key |
-| Ollama | Local Ollama at `http://127.0.0.1:11434`, or an [Ollama Cloud](https://ollama.com) API key |
+| Ollama | **Settings → Ollama**: local URL (`http://127.0.0.1:11434`) or [Ollama Cloud](https://ollama.com) API key. Pick or type a model, **Pull / install** on a local server, then **Test model**. |
 
 ## Run
 
-In Cursor/VS Code, choose **Mini Cursor** and press F5.
+In Cursor/VS Code, choose **Halo IDE** and press F5.
 
 Or from a terminal:
 
@@ -60,7 +62,7 @@ npm run electron:dev
 
 Electron builds the API, starts Vite, launches the window, and owns the backend lifecycle (start on open, stop on quit).
 
-The default workspace is `sample-workspace/` until you use **Open Folder**. The last opened folder is restored on the next launch.
+The default workspace is `sample-workspace/` until you use **File → Open Folder**. The last opened folder is restored on the next launch.
 
 To run the API alone (for example while iterating on the backend):
 
@@ -73,13 +75,13 @@ The API listens on `http://127.0.0.1:45154`. Pair it with `npm run dev` in `fron
 
 ## Build a portable exe
 
-Produces `frontend/release/win-unpacked/Mini Cursor.exe` (no installer):
+Produces `frontend/release/win-unpacked/Halo IDE.exe` (no installer):
 
 ```powershell
 .\scripts\build-exe.ps1
 ```
 
-Or run the **Build Mini Cursor EXE** launch config. Same thing via npm:
+Or run the **Build Halo IDE EXE** launch config. Same thing via npm:
 
 ```powershell
 cd frontend
@@ -123,7 +125,7 @@ Produces `frontend/release/mini-cursor-setup-<version>.exe` plus `latest.yml` (t
 .\scripts\build-installer.ps1 -Version 0.2.0
 ```
 
-Or run the **Build Mini Cursor Installer** launch config. Same thing via npm:
+Or run the **Build Halo IDE Installer** launch config. Same thing via npm:
 
 ```powershell
 cd frontend
@@ -177,18 +179,95 @@ CI also runs `.\scripts\test.ps1` on pull requests. Add backend tests under `tes
 
 Leave `WorkspaceRoot` empty to use `sample-workspace`. Prefer setting a GitHub PAT in **Settings** rather than committing it here.
 
-Chat history lives in `<workspace>/.mini-cursor/chats` and is retained for 3 days. App secrets and AI settings are stored under the data directory (`backend/AppData` in development; Electron user data when packaged).
+Chat history lives in `<workspace>/.mini-cursor/chats` and is retained for 3 days. App secrets and AI settings are stored under the data directory (`backend/AppData` in development; Electron user data when packaged). Workspace plugins live in `<workspace>/.mini-cursor/plugins`.
+
+## Plugins
+
+Halo IDE does not load VS Code extensions. It loads **workspace plugins**: a folder under `.mini-cursor/plugins/<id>/` with `plugin.json` and a script.
+
+`plugin.json`:
+
+```json
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "0.1.0",
+  "main": "plugin.js"
+}
+```
+
+`plugin.js` must define `function activate(api)`. Contribution points are context menus, up to five title-bar buttons on the explorer and editor, and syntax coloring:
+
+```js
+function activate(api) {
+  api.registerContextMenuItem({
+    id: 'logPath',
+    title: 'Log Path',
+    locations: ['explorer', 'editor'], // optional; default both
+    target: 'any', // optional: 'file' | 'folder' | 'any'
+    files: ['.js', 'javascript'], // optional: extensions, language ids, names, or globs
+    run: function (ctx) {
+      api.log(ctx.path || ctx.workspaceRoot)
+    },
+  })
+
+  api.registerTitleItem({
+    id: 'logPathTitle',
+    title: 'Log Path',
+    locations: ['explorer', 'editor'], // optional; default editor
+    run: function (ctx) {
+      api.log(ctx.path || ctx.workspaceRoot)
+    },
+  })
+}
+```
+
+`run` receives `{ location, path, workspaceRoot, isDirectory, language, selection, line, column }`. `api.clipboard.write(text)` copies text. Messages from `api.log` show in the Output panel.
+
+`files` limits an item to certain files. Each entry can be an extension (`.json` or `json`), a Monaco language id (`javascript`), a file name (`package.json`), or a glob (`**/*.test.ts`). If `files` is omitted, the item is shown for every file and folder (still subject to `target`). A `files` filter never matches folders.
+
+Plugins can also register syntax coloring. Omit `monarch` to map extensions onto a language Monaco already ships; include it for a custom tokenizer:
+
+```js
+function activate(api) {
+  api.registerLanguage({
+    id: 'cpp',
+    extensions: ['.c', '.h', '.cpp', '.hpp'],
+    aliases: ['C++'],
+  })
+
+  api.registerLanguage({
+    id: 'hello',
+    extensions: ['.hello'],
+    monarch: {
+      tokenizer: {
+        root: [
+          [/#[^\n]*/, 'comment'],
+          [/\b(hello|world)\b/, 'keyword'],
+        ],
+      },
+    },
+  })
+}
+```
+
+Later registrations win for the same extension or file name, so a workspace plugin can override the built-in map. Built-in items (Copy Path, Copy Absolute Path, Copy File Name) and popular language maps are always available. The sample workspace ships a **Hello** plugin with **Log Path**, **Log JS Path**, a title-bar **Log Path** button, and a `.hello` language. After editing a plugin, save it or run **Reload Plugins** from the Help menu or command palette.
+
+Hide the Run, Editor, Explorer, Git, or Chat toolbars from **View → Appearance**. Those commands stay in the application menu and command palette.
 
 ## Keybindings
 
 | Shortcut | Action |
 |----------|--------|
+| Ctrl+O | Open folder |
 | Ctrl+P | Quick open file |
-| Ctrl+Shift+P | Command palette |
+| Ctrl+Shift+P | Command palette (includes Go to Symbol in File) |
 | Ctrl+Shift+F | Workspace search |
 | Ctrl+Shift+E | Show explorer |
 | Ctrl+S | Save |
 | Ctrl+K S | Save all |
+| Ctrl+G | Go to line |
+| Shift+Alt+F | Format document |
 | Ctrl+Shift+T | Reopen closed editor |
 | Ctrl+` | Focus terminal |
 | Ctrl+B | Toggle bottom panel |

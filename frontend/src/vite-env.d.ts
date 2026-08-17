@@ -34,6 +34,8 @@ declare global {
       checkForUpdates: () => Promise<MiniCursorUpdateState | null>
       installUpdate: () => Promise<boolean>
       onUpdate: (callback: (state: MiniCursorUpdateState) => void) => () => void
+      setApplicationMenu: (template: unknown) => void
+      onMenuCommand: (callback: (payload: { id: string; data?: string }) => void) => () => void
     }
   }
 }

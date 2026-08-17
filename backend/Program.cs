@@ -22,6 +22,8 @@ builder.Services.AddSingleton<AiProviderService>();
 builder.Services.AddSingleton<ProviderChatService>();
 builder.Services.AddSingleton<ChatService>();
 builder.Services.AddSingleton<CursorChatImportService>();
+builder.Services.AddSingleton<PluginService>();
+builder.Services.AddSingleton<WorkspaceWatchService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CopilotService>());
 builder.Services.AddCors(options =>
 {
@@ -116,16 +118,42 @@ app.MapGet("/api/files/tree", (bool? gitignore, WorkspaceService workspace, ILog
     }
 });
 
-app.MapGet("/api/search", (string q, bool? gitignore, WorkspaceService workspace, ILogger<Program> logger, HttpContext http) =>
+app.MapGet("/api/search", (string q, bool? gitignore, bool? regex, bool? matchCase, string? include, string? exclude, WorkspaceService workspace, ILogger<Program> logger, HttpContext http) =>
 {
     try
     {
-        return Results.Ok(workspace.Search(q ?? "", gitignore ?? true));
+        return Results.Ok(workspace.Search(
+            q ?? "",
+            gitignore ?? true,
+            regex ?? false,
+            matchCase ?? false,
+            include,
+            exclude));
     }
     catch (Exception ex)
     {
         logger.LogWarning(ex, "Workspace search failed for query {Query}", q);
         return BadRequestError(http, "The search could not be completed.", "workspace_search_failed");
+    }
+});
+
+app.MapPost("/api/search/replace", (SearchReplaceRequest request, WorkspaceService workspace, ILogger<Program> logger, HttpContext http) =>
+{
+    try
+    {
+        return Results.Ok(workspace.ReplaceInFiles(
+            request.Query ?? "",
+            request.Replacement ?? "",
+            request.Gitignore,
+            request.Regex,
+            request.MatchCase,
+            request.Include,
+            request.Exclude));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Workspace replace failed for query {Query}", request.Query);
+        return BadRequestError(http, "The replace could not be completed.", "workspace_replace_failed");
     }
 });
 
@@ -218,16 +246,37 @@ app.MapDelete("/api/files", (string path, WorkspaceService workspace, ILogger<Pr
     }
 });
 
+// --- Plugins ---
+app.MapGet("/api/plugins", (PluginService plugins) => Results.Ok(plugins.List()));
+
+app.MapGet("/api/plugins/{id}", (string id, PluginService plugins, ILogger<Program> logger, HttpContext http) =>
+{
+    try
+    {
+        return Results.Ok(plugins.Read(id));
+    }
+    catch (FileNotFoundException ex)
+    {
+        logger.LogInformation(ex, "Requested plugin was not found: {Id}", id);
+        return NotFoundError(http, "The requested plugin was not found.", "plugin_not_found");
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Failed to load plugin {Id}", id);
+        return BadRequestError(http, "The plugin could not be loaded.", "plugin_read_failed");
+    }
+});
+
 // --- Launch ---
 app.MapGet("/api/launch", (LaunchService launch) => Results.Ok(launch.GetConfigurations()));
 
 app.MapGet("/api/launch/runs", (LaunchService launch) => Results.Ok(launch.ListRuns()));
 
-app.MapPost("/api/launch/{name}/run", (string name, LaunchService launch, ILogger<Program> logger, HttpContext http) =>
+app.MapPost("/api/launch/{name}/run", (string name, LaunchService launch, TaskService tasks, ILogger<Program> logger, HttpContext http) =>
 {
     try
     {
-        return Results.Ok(launch.Start(Uri.UnescapeDataString(name)));
+        return Results.Ok(launch.Start(Uri.UnescapeDataString(name), tasks));
     }
     catch (Exception ex)
     {
@@ -281,6 +330,19 @@ app.MapGet("/api/git/status", (GitService git, ILogger<Program> logger, HttpCont
     }
 });
 
+app.MapGet("/api/git/file", (string path, GitService git, ILogger<Program> logger, HttpContext http) =>
+{
+    try
+    {
+        return Results.Ok(git.GetHeadFile(path));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Failed to read git file {Path}", path);
+        return BadRequestError(http, "The file could not be read from Git.", "git_file_failed");
+    }
+});
+
 app.MapPost("/api/git/operations", (GitOperationRequest request, GitService git, ILogger<Program> logger, HttpContext http) =>
 {
     try
@@ -292,6 +354,19 @@ app.MapPost("/api/git/operations", (GitOperationRequest request, GitService git,
         logger.LogWarning(ex, "Failed to start git operation {Operation}", request.Operation);
         return BadRequestError(http, "The Git operation could not be started.", "git_operation_failed");
     }
+});
+
+app.Map("/api/workspace/watch", async (HttpContext http, WorkspaceWatchService watch) =>
+{
+    if (!http.WebSockets.IsWebSocketRequest)
+    {
+        http.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await http.Response.WriteAsync("Expected WebSocket request.");
+        return;
+    }
+
+    using var socket = await http.WebSockets.AcceptWebSocketAsync();
+    await watch.HandleWebSocketAsync(socket, http.RequestAborted);
 });
 
 // --- Interactive terminal (WebSocket) ---
@@ -337,6 +412,46 @@ app.MapGet("/api/ai/models", async (string provider, AiProviderService providers
     {
         logger.LogWarning(ex, "Failed to list AI models for provider {Provider}", provider);
         return BadRequestError(http, "The model list could not be loaded for that provider.", "ai_models_failed");
+    }
+});
+
+app.MapPost("/api/ollama/pull", async (OllamaModelRequest request, HttpContext http, AiProviderService providers, ILogger<Program> logger) =>
+{
+    http.Response.ContentType = "application/x-ndjson";
+    http.Response.Headers.CacheControl = "no-cache";
+    var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    try
+    {
+        await foreach (var evt in providers.PullOllamaAsync(request.Model, http.RequestAborted))
+        {
+            await http.Response.WriteAsync(JsonSerializer.Serialize(evt, json) + "\n", http.RequestAborted);
+            await http.Response.Body.FlushAsync(http.RequestAborted);
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Ollama pull failed for {Model}", request.Model);
+        if (!http.Response.HasStarted)
+        {
+            http.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await http.Response.WriteAsJsonAsync(ApiError(http, ex.Message, "ollama_pull_failed"));
+            return;
+        }
+
+        await http.Response.WriteAsync(JsonSerializer.Serialize(new OllamaPullEventDto(Error: ex.Message), json) + "\n", http.RequestAborted);
+    }
+});
+
+app.MapPost("/api/ollama/test", async (OllamaModelRequest request, AiProviderService providers, ILogger<Program> logger, HttpContext http, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await providers.TestOllamaAsync(request.Model, ct));
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Ollama test failed for {Model}", request.Model);
+        return BadRequestError(http, ex.Message, "ollama_test_failed");
     }
 });
 

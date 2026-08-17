@@ -48,7 +48,7 @@ jobs:
           "version=$ver" >> $env:GITHUB_OUTPUT
           "tag=v$ver" >> $env:GITHUB_OUTPUT
           "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
-          Write-Host "Releasing Mini Cursor $ver (tag v$ver)"
+          Write-Host "Releasing Halo IDE $ver (tag v$ver)"
 
       - uses: actions/checkout@v4
         with:
@@ -137,7 +137,7 @@ jobs:
           $tag = '${{ steps.version.outputs.tag }}'
           $setup = "frontend/release/mini-cursor-setup-$ver.exe"
           $lines = @(
-            "## Mini Cursor $ver",
+            "## Halo IDE $ver",
             "",
             "- Tag: ``$tag``",
             "- Event: ``$env:GITHUB_EVENT_NAME``"

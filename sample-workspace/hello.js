@@ -1,2 +1,2 @@
-console.log("Hello from Mini Cursor!");
+console.log("Hello from Halo IDE!");
 console.log("Launch configs are working.");

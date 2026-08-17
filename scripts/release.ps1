@@ -1,4 +1,4 @@
-# Cut a Mini Cursor release: notes, tests, optional patch bump, installer, git tag, GitHub Release.
+# Cut a Halo IDE release: notes, tests, optional patch bump, installer, git tag, GitHub Release.
 #
 # Default bump is patch only when the current version is already tagged.
 # After .\scripts\bump.ps1 major|minor, run this script to ship that version as-is.
@@ -114,12 +114,8 @@ if (-not $SkipBuild) {
 }
 
 Write-Host "==> Tagging v$version..." -ForegroundColor Cyan
-git tag -a "v$version" -m "Mini Cursor $version"
+git tag -a "v$version" -m "Halo IDE $version"
 if ($LASTEXITCODE -ne 0) { throw "git tag failed with exit code $LASTEXITCODE" }
-
-if (-not $SkipBuild) {
-  & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -Version $version -NotesFile $notesFile -VerifyTag
-}
 
 if (-not $NoPush) {
   Write-Host '==> Pushing commit and tag...' -ForegroundColor Cyan
@@ -132,10 +128,19 @@ else {
   Write-Host 'Skipped push (-NoPush). Tag is local only.' -ForegroundColor Yellow
 }
 
+if (-not $SkipBuild) {
+  if ($NoPush) {
+    Write-Host 'Skipping GitHub Release because -NoPush. The remote tag must exist before publishing.' -ForegroundColor Yellow
+  }
+  else {
+    & (Join-Path $PSScriptRoot 'publish-github-release.ps1') -Version $version -NotesFile $notesFile -VerifyTag
+  }
+}
+
 Remove-Item -Force $notesFile -ErrorAction SilentlyContinue
 
 Write-Host ''
-Write-Host "Released Mini Cursor $version" -ForegroundColor Green
+Write-Host "Released Halo IDE $version" -ForegroundColor Green
 if ($SkipBuild -and -not $NoPush) {
   Write-Host "Installer will be built by the GitHub Release workflow for tag v$version." -ForegroundColor Green
 }

@@ -69,17 +69,34 @@ public sealed class LaunchService
                 program = re.GetString();
             }
 
-            list.Add(new LaunchConfigDto(name!, type, request, program, cwd, args, env));
+            var preLaunch = item.TryGetProperty("preLaunchTask", out var plt) ? plt.GetString() : null;
+
+            list.Add(new LaunchConfigDto(name!, type, request, program, cwd, args, env, preLaunch));
         }
 
         return list;
     }
 
-    public LaunchRunDto Start(string configName)
+    public LaunchRunDto Start(string configName, TaskService? tasks = null)
     {
         var config = GetConfigurations()
             .FirstOrDefault(c => string.Equals(c.Name, configName, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException($"Launch configuration '{configName}' not found.");
+
+        string? preLaunchOutput = null;
+        if (!string.IsNullOrWhiteSpace(config.PreLaunchTask))
+        {
+            if (tasks is null)
+                throw new InvalidOperationException($"Launch config '{config.Name}' requires task '{config.PreLaunchTask}'.");
+
+            var taskRun = tasks.Start(config.PreLaunchTask);
+            WaitForRun(taskRun.Id, TimeSpan.FromMinutes(10));
+            var finished = GetRun(taskRun.Id)
+                ?? throw new InvalidOperationException($"preLaunchTask '{config.PreLaunchTask}' disappeared.");
+            if (finished.ExitCode is int code && code != 0)
+                throw new InvalidOperationException($"preLaunchTask '{config.PreLaunchTask}' failed (exit {code}).");
+            preLaunchOutput = GetOutput(taskRun.Id);
+        }
 
         var id = Guid.NewGuid().ToString("N");
         var cwd = ResolveCwd(config.Cwd);
@@ -106,6 +123,9 @@ public sealed class LaunchService
         var run = new LaunchRun(id, config.Name, process);
         if (!_runs.TryAdd(id, run))
             throw new InvalidOperationException("Failed to register launch run.");
+
+        if (!string.IsNullOrEmpty(preLaunchOutput))
+            run.Append($"[preLaunchTask {config.PreLaunchTask}]{Environment.NewLine}{preLaunchOutput}{Environment.NewLine}");
 
         process.OutputDataReceived += (_, e) =>
         {
@@ -207,6 +227,20 @@ public sealed class LaunchService
 
     public IReadOnlyList<LaunchRunDto> ListRuns() =>
         _runs.Values.OrderByDescending(r => r.StartedAt).Select(r => r.ToDto()).ToList();
+
+    private void WaitForRun(string id, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var run = GetRun(id);
+            if (run is null || !string.Equals(run.Status, "running", StringComparison.OrdinalIgnoreCase))
+                return;
+            Thread.Sleep(50);
+        }
+
+        throw new TimeoutException($"Timed out waiting for run {id}.");
+    }
 
     private string ResolveCwd(string? cwd)
     {

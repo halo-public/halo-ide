@@ -1,9 +1,12 @@
+import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from './themes'
+
 export type EditorSettings = {
   fontSize: number
   wordWrap: boolean
   tabSize: number
   minimap: boolean
   respectGitignore: boolean
+  theme: ThemeId
 }
 
 const STORAGE_KEY = 'mini-cursor.settings'
@@ -14,6 +17,7 @@ export const SETTINGS_DEFAULTS: EditorSettings = {
   tabSize: 2,
   minimap: false,
   respectGitignore: true,
+  theme: DEFAULT_THEME_ID,
 }
 
 export function loadSettings(): EditorSettings {
@@ -27,6 +31,7 @@ export function loadSettings(): EditorSettings {
       tabSize: clamp(parsed.tabSize ?? SETTINGS_DEFAULTS.tabSize, 1, 8),
       minimap: parsed.minimap ?? SETTINGS_DEFAULTS.minimap,
       respectGitignore: parsed.respectGitignore ?? SETTINGS_DEFAULTS.respectGitignore,
+      theme: isThemeId(parsed.theme) ? parsed.theme : SETTINGS_DEFAULTS.theme,
     }
   } catch {
     return { ...SETTINGS_DEFAULTS }

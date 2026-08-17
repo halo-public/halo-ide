@@ -35,7 +35,7 @@ if ($Version) {
 }
 
 $AppVersion = Get-MiniCursorVersion -FrontendDir $Frontend
-Write-Host "==> Packaging Mini Cursor $AppVersion ($Target)..." -ForegroundColor Cyan
+Write-Host "==> Packaging Halo IDE $AppVersion ($Target)..." -ForegroundColor Cyan
 
 Write-Host '==> Publishing ASP.NET API (self-contained win-x64)...' -ForegroundColor Cyan
 if (Test-Path $PublishDir) {
@@ -105,12 +105,12 @@ finally {
 
 $ReleaseDir = Join-Path $Frontend 'release'
 if ($Target -eq 'dir') {
-  $exe = Join-Path $ReleaseDir 'win-unpacked\Mini Cursor.exe'
+  $exe = Join-Path $ReleaseDir 'win-unpacked\Halo IDE.exe'
   if (-not (Test-Path $exe)) {
     throw "Build finished but exe not found at $exe"
   }
   Write-Host ''
-  Write-Host "Done. Mini Cursor $AppVersion (portable). Run: $exe" -ForegroundColor Green
+  Write-Host "Done. Halo IDE $AppVersion (portable). Run: $exe" -ForegroundColor Green
 }
 else {
   $setup = Join-Path $ReleaseDir "mini-cursor-setup-$AppVersion.exe"
@@ -124,7 +124,7 @@ else {
     throw "Build finished but installer not found in $ReleaseDir"
   }
   Write-Host ''
-  Write-Host "Done. Mini Cursor $AppVersion installer: $setup" -ForegroundColor Green
+  Write-Host "Done. Halo IDE $AppVersion installer: $setup" -ForegroundColor Green
   if ($Publish) {
     Write-Host 'Published to GitHub Releases (auto-update feed: latest.yml).' -ForegroundColor Green
   }

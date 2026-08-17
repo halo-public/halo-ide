@@ -52,7 +52,7 @@ function Get-MiniCursorSemVerParts {
   param([Parameter(Mandatory = $true)][string]$Version)
 
   if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$') {
-    throw "Version must be semver, e.g. 0.1.0 or 0.2.0-beta.1"
+§d264208
   }
 
   return [pscustomobject]@{
@@ -159,8 +159,11 @@ $Notes
       $section.TrimEnd() + "`r`n"
     )
   }
-  elseif ($existing -match '(?s)^(# Changelog\r?\n\r?\n)') {
-    $existing = $existing -replace '(# Changelog\r?\n\r?\n)', "`$1$section"
+  elseif ($existing -match '(?s)(?<pre>^# Changelog.*?)(?=\r?\n## |\z)') {
+    $pre = $Matches['pre'].TrimEnd()
+    $rest = $existing.Substring($Matches[0].Length).TrimStart()
+    $existing = $pre + "`r`n`r`n" + $section.TrimEnd() + "`r`n"
+    if ($rest) { $existing += "`r`n" + $rest }
   }
   else {
     $existing = "# Changelog`r`n`r`n$section$existing"
@@ -178,7 +181,7 @@ function Write-MiniCursorNotesFile {
   )
 
   $body = @"
-# Mini Cursor $Version
+# Halo IDE $Version
 
 $Notes
 "@

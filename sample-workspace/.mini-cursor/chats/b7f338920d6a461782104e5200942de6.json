@@ -1,0 +1,27 @@
+{
+  "id": "b7f338920d6a461782104e5200942de6",
+  "title": "test",
+  "createdAt": "2026-08-16T03:47:34.5941674+00:00",
+  "updatedAt": "2026-08-16T03:48:37.4647135+00:00",
+  "copilotSessionId": null,
+  "provider": "wire",
+  "model": "gpt-5",
+  "messages": [
+    {
+      "id": "30a4fb1fc75f4437a64ce62858d51eb9",
+      "role": "user",
+      "content": "test",
+      "createdAt": "2026-08-16T03:47:38.1557192+00:00",
+      "attachments": null,
+      "toolCalls": null
+    },
+    {
+      "id": "eabc5fe04e194bbeb2a5c4dffa520606",
+      "role": "assistant",
+      "content": "Test acknowledged.",
+      "createdAt": "2026-08-16T03:48:37.4647126+00:00",
+      "attachments": null,
+      "toolCalls": null
+    }
+  ]
+}

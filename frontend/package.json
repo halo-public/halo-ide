@@ -26,9 +26,9 @@
     "url": "https://github.com/halo-public/mini-cursor.git"
   },
   "build": {
-    "appId": "com.minicursor.app",
-    "productName": "Mini Cursor",
-    "copyright": "Copyright © Mini Cursor",
+    "appId": "com.haloide.app",
+    "productName": "Halo IDE",
+    "copyright": "Copyright © Halo IDE",
     "directories": {
       "output": "release",
       "buildResources": "assets"
@@ -69,8 +69,8 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Mini Cursor",
-      "uninstallDisplayName": "Mini Cursor ${version}",
+      "shortcutName": "Halo IDE",
+      "uninstallDisplayName": "Halo IDE ${version}",
       "artifactName": "${name}-setup-${version}.${ext}"
     },
     "publish": {

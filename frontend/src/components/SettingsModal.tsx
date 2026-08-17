@@ -1,11 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { api } from '../api/client'
 import type { AiSettings, CredentialsSettings, ProviderOption } from '../api/types'
 import { saveSettings, type EditorSettings } from '../settingsPrefs'
+import { THEMES } from '../themes'
+import { OllamaSettings } from './OllamaSettings'
+import { CLOUD_OLLAMA, LOCAL_OLLAMA } from '../ollamaModels'
 
-const LOCAL_OLLAMA = 'http://127.0.0.1:11434'
-const CLOUD_OLLAMA = 'https://ollama.com'
 const LOCAL_WIRE = 'http://127.0.0.1:41793/v1'
+
+type SettingsTabId = 'editor' | 'ai' | 'ollama' | 'git' | 'about'
+
+const SETTINGS_TABS: { id: SettingsTabId; label: string }[] = [
+  { id: 'editor', label: 'Editor' },
+  { id: 'ai', label: 'AI' },
+  { id: 'ollama', label: 'Ollama' },
+  { id: 'git', label: 'Git' },
+  { id: 'about', label: 'About' },
+]
 
 interface Props {
   open: boolean
@@ -50,11 +61,13 @@ export function SettingsModal({
   const [credentials, setCredentials] = useState<CredentialsSettings>({ gitHubPat: '' })
   const [openAiKey, setOpenAiKey] = useState('')
   const [ollamaKey, setOllamaKey] = useState('')
+  const [ollamaModel, setOllamaModel] = useState('')
   const [wireBaseUrl, setWireBaseUrl] = useState('')
   const [wireStatus, setWireStatus] = useState<string | null>(null)
   const [detectingWire, setDetectingWire] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [savingCredentials, setSavingCredentials] = useState(false)
+  const [tabId, setTabId] = useState<SettingsTabId>('editor')
   const savedGitHubPat = useRef('')
   const savedOpenAiKey = useRef('')
   const savedOllamaKey = useRef('')
@@ -69,28 +82,26 @@ export function SettingsModal({
       .then(async ([nextProviders, nextSettings, nextCredentials]) => {
         const pat = nextCredentials.gitHubPat ?? ''
         const openai = nextSettings.providers.find((p) => p.provider === 'openai')?.apiKey ?? ''
-        const ollama = nextSettings.providers.find((p) => p.provider === 'ollama')?.apiKey ?? ''
+        const ollama = nextSettings.providers.find((p) => p.provider === 'ollama')
+        const ollamaKeyValue = ollama?.apiKey ?? ''
         const wire = nextSettings.providers.find((p) => p.provider === 'wire')?.baseUrl ?? ''
         setProviders(nextProviders)
         setAiSettings(nextSettings)
         setCredentials({ gitHubPat: pat })
         setOpenAiKey(openai)
-        setOllamaKey(ollama)
+        setOllamaKey(ollamaKeyValue)
+        setOllamaModel(ollama?.model ?? '')
         setWireBaseUrl(wire)
         savedGitHubPat.current = pat
         savedOpenAiKey.current = openai
-        savedOllamaKey.current = ollama
+        savedOllamaKey.current = ollamaKeyValue
         setError(null)
         if (!wire.trim()) {
-          try {
-            const detected = await api.detectAuraWire()
+          api.detectAuraWire().then(async (detected) => {
             if (detected.baseUrl) setWireBaseUrl(detected.baseUrl)
             setWireStatus(detected.message ?? null)
-            const refreshed = await api.getAiSettings()
-            setAiSettings(refreshed)
-          } catch (e) {
-            setWireStatus(e instanceof Error ? e.message : 'Could not detect Aura Wire.')
-          }
+            setAiSettings(await api.getAiSettings())
+          }).catch((err: Error) => setWireStatus(err.message || 'Could not detect Aura Wire.'))
         } else {
           setWireStatus(null)
         }
@@ -108,9 +119,9 @@ export function SettingsModal({
 
   const updateProviderSetting = (
     provider: string,
-    field: 'apiKey' | 'baseUrl',
+    field: 'apiKey' | 'baseUrl' | 'model',
     value: string,
-    extras?: Partial<{ apiKey: string; baseUrl: string }>,
+    extras?: Partial<{ apiKey: string; baseUrl: string; model: string }>,
   ) => {
     const existing = aiSettings.providers.find((p) => p.provider === provider)
     const next: AiSettings = {
@@ -120,6 +131,7 @@ export function SettingsModal({
           provider,
           apiKey: existing?.apiKey ?? '',
           baseUrl: existing?.baseUrl ?? '',
+          model: existing?.model ?? '',
           [field]: value,
           ...extras,
         },
@@ -135,6 +147,9 @@ export function SettingsModal({
       const key = extras?.apiKey ?? (field === 'apiKey' ? value : existing?.apiKey ?? '')
       setOllamaKey(key)
       savedOllamaKey.current = key
+    }
+    if (provider === 'ollama' && (field === 'model' || extras?.model !== undefined)) {
+      setOllamaModel(extras?.model ?? (field === 'model' ? value : existing?.model ?? ''))
     }
     void api.saveAiSettings(next).then(setAiSettings).catch((e: Error) => setError(e.message))
   }
@@ -157,6 +172,13 @@ export function SettingsModal({
     updateProviderSetting('ollama', 'apiKey', value, extras)
   }
 
+  const saveOllamaModel = (value: string) => {
+    setOllamaModel(value)
+    const current = aiSettings.providers.find((p) => p.provider === 'ollama')?.model ?? ''
+    if (value === current) return
+    updateProviderSetting('ollama', 'model', value)
+  }
+
   const saveWireBaseUrl = (value: string) => {
     const trimmed = value.trim()
     setWireBaseUrl(trimmed)
@@ -168,17 +190,12 @@ export function SettingsModal({
   const detectWire = async () => {
     setDetectingWire(true)
     setWireStatus(null)
-    try {
-      const detected = await api.detectAuraWire()
+    await api.detectAuraWire().then(async (detected) => {
       if (detected.baseUrl) setWireBaseUrl(detected.baseUrl)
       setWireStatus(detected.message ?? null)
-      const refreshed = await api.getAiSettings()
-      setAiSettings(refreshed)
-    } catch (e) {
-      setWireStatus(e instanceof Error ? e.message : 'Could not detect Aura Wire.')
-    } finally {
-      setDetectingWire(false)
-    }
+      setAiSettings(await api.getAiSettings())
+    }).catch((err: Error) => setWireStatus(err.message || 'Could not detect Aura Wire.'))
+    setDetectingWire(false)
   }
 
   const saveGitHubPat = (value: string) => {
@@ -202,6 +219,18 @@ export function SettingsModal({
   )
   const ollamaSettings = aiSettings.providers.find((p) => p.provider === 'ollama')
 
+  const onTabsKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const index = SETTINGS_TABS.findIndex((tab) => tab.id === tabId)
+    if (index < 0) return
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault()
+      const delta = e.key === 'ArrowRight' ? 1 : -1
+      const next = SETTINGS_TABS[(index + delta + SETTINGS_TABS.length) % SETTINGS_TABS.length]
+      setTabId(next.id)
+      document.getElementById(`settings-tab-${next.id}`)?.focus()
+    }
+  }
+
   return (
     <div className="overlay-backdrop" onMouseDown={onClose}>
       <div
@@ -216,171 +245,249 @@ export function SettingsModal({
             ✕
           </button>
         </div>
-        <label className="settings-row">
-          <span>Font size</span>
-          <input
-            type="number"
-            min={10}
-            max={24}
-            value={draft.fontSize}
-            onChange={(e) => apply({ ...draft, fontSize: Number(e.target.value) || 13 })}
-          />
-        </label>
-        <label className="settings-row">
-          <span>Tab size</span>
-          <input
-            type="number"
-            min={1}
-            max={8}
-            value={draft.tabSize}
-            onChange={(e) => apply({ ...draft, tabSize: Number(e.target.value) || 2 })}
-          />
-        </label>
-        <label className="settings-row checkbox">
-          <input
-            type="checkbox"
-            checked={draft.wordWrap}
-            onChange={(e) => apply({ ...draft, wordWrap: e.target.checked })}
-          />
-          <span>Word wrap</span>
-        </label>
-        <label className="settings-row checkbox">
-          <input
-            type="checkbox"
-            checked={draft.minimap}
-            onChange={(e) => apply({ ...draft, minimap: e.target.checked })}
-          />
-          <span>Minimap</span>
-        </label>
-        <label className="settings-row checkbox">
-          <input
-            type="checkbox"
-            checked={draft.respectGitignore}
-            onChange={(e) => apply({ ...draft, respectGitignore: e.target.checked })}
-          />
-          <span>Respect .gitignore</span>
-        </label>
-
-        <div className="settings-section">
-          <h4>About</h4>
-          <div className="settings-row">
-            <span>Mini Cursor</span>
-            <span className="settings-about-version">v{appVersion}</span>
-          </div>
-          <p className="settings-update-status">{updateStatusText(updateState)}</p>
-          <div className="settings-actions">
+        <div
+          className="settings-tabs"
+          role="tablist"
+          aria-label="Settings sections"
+          onKeyDown={onTabsKeyDown}
+        >
+          {SETTINGS_TABS.map((tab) => (
             <button
-              className="primary-btn"
-              disabled={!window.miniCursor?.checkForUpdates || updateState?.status === 'checking' || updateState?.status === 'downloading'}
-              onClick={() => onCheckForUpdates()}
+              key={tab.id}
+              id={`settings-tab-${tab.id}`}
+              type="button"
+              role="tab"
+              className={tabId === tab.id ? 'settings-tab active' : 'settings-tab'}
+              aria-selected={tabId === tab.id}
+              aria-controls={`settings-panel-${tab.id}`}
+              tabIndex={tabId === tab.id ? 0 : -1}
+              onClick={() => setTabId(tab.id)}
             >
-              Check for updates
+              {tab.label}
             </button>
-            {updateState?.status === 'downloaded' && (
-              <button className="primary-btn" onClick={() => onInstallUpdate()}>
-                Restart to update
-              </button>
-            )}
-          </div>
+          ))}
         </div>
-
-        <div className="settings-section">
-          <h4>Credentials</h4>
+        <div className="settings-body">
           {error && <div className="error-text">{error}</div>}
-          <label className="settings-row settings-row-stack">
-            <span>GitHub PAT</span>
-            <input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="ghp_… (git remotes + Copilot)"
-              value={credentials.gitHubPat ?? ''}
-              disabled={savingCredentials}
-              onChange={(e) => setCredentials({ gitHubPat: e.target.value })}
-              onBlur={(e) => saveGitHubPat(e.target.value)}
-            />
-          </label>
-          <label className="settings-row settings-row-stack">
-            <span>OpenAI API key</span>
-            <input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="sk-…"
-              value={openAiKey}
-              onChange={(e) => setOpenAiKey(e.target.value)}
-              onBlur={(e) => saveOpenAiKey(e.target.value)}
-            />
-          </label>
-          <label className="settings-row settings-row-stack">
-            <span>Ollama Cloud API key</span>
-            <input
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="From ollama.com/settings/keys"
-              value={ollamaKey}
-              onChange={(e) => setOllamaKey(e.target.value)}
-              onBlur={(e) => saveOllamaKey(e.target.value)}
-            />
-          </label>
-          <label className="settings-row settings-row-stack">
-            <span>Ollama base URL</span>
-            <input
-              type="text"
-              spellCheck={false}
-              placeholder={`${LOCAL_OLLAMA} or ${CLOUD_OLLAMA}`}
-              value={ollamaSettings?.baseUrl ?? (ollamaKey ? CLOUD_OLLAMA : LOCAL_OLLAMA)}
-              onChange={(e) => updateProviderSetting('ollama', 'baseUrl', e.target.value)}
-            />
-          </label>
-          <div className="settings-row settings-row-stack">
-            <span>Aura Wire API</span>
-            <div className="settings-row-with-action">
-              <input
-                type="text"
-                spellCheck={false}
-                placeholder={LOCAL_WIRE}
-                value={wireBaseUrl}
-                onChange={(e) => setWireBaseUrl(e.target.value)}
-                onBlur={(e) => saveWireBaseUrl(e.target.value)}
-              />
-              <button
-                type="button"
-                className="primary-btn settings-detect-btn"
-                disabled={detectingWire}
-                onClick={() => void detectWire()}
-              >
-                {detectingWire ? 'Detecting…' : 'Detect'}
-              </button>
-            </div>
-          </div>
-          {wireStatus && <div className="settings-hint">{wireStatus}</div>}
-        </div>
 
-        <div className="settings-section">
-          <h4>Other AI Providers</h4>
-          {otherProviders.map((provider) => {
-            const current = aiSettings.providers.find((p) => p.provider === provider.id)
-            return (
-              <div key={provider.id} className="settings-provider">
-                <div className="settings-provider-title">
-                  <span>{provider.name}</span>
-                  {provider.requiresApiKey && <span className="settings-provider-hint">API key</span>}
+          {tabId === 'editor' && (
+            <div
+              id="settings-panel-editor"
+              role="tabpanel"
+              aria-labelledby="settings-tab-editor"
+            >
+              <div className="settings-row settings-row-stack">
+                <span>Theme</span>
+                <div className="theme-picker" role="listbox" aria-label="Color theme">
+                  {THEMES.map((theme) => {
+                    const selected = draft.theme === theme.id
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={selected ? 'theme-swatch active' : 'theme-swatch'}
+                        onClick={() => apply({ ...draft, theme: theme.id })}
+                      >
+                        <span
+                          className="theme-swatch-preview"
+                          style={{
+                            background: theme.tokens.bgEditor,
+                            borderColor: theme.tokens.borderStrong,
+                          }}
+                        >
+                          <span style={{ background: theme.tokens.accent }} />
+                          <span style={{ background: theme.tokens.bgSidebar }} />
+                        </span>
+                        <span className="theme-swatch-meta">
+                          <span className="theme-swatch-name">{theme.name}</span>
+                          <span className="theme-swatch-kind">{theme.kind}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
-                {provider.requiresApiKey && (
-                  <label className="settings-row settings-row-stack">
-                    <span>API key</span>
-                    <input
-                      type="password"
-                      value={current?.apiKey ?? ''}
-                      onChange={(e) => updateProviderSetting(provider.id, 'apiKey', e.target.value)}
-                    />
-                  </label>
+              </div>
+              <label className="settings-row">
+                <span>Font size</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={24}
+                  value={draft.fontSize}
+                  onChange={(e) => apply({ ...draft, fontSize: Number(e.target.value) || 13 })}
+                />
+              </label>
+              <label className="settings-row">
+                <span>Tab size</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={draft.tabSize}
+                  onChange={(e) => apply({ ...draft, tabSize: Number(e.target.value) || 2 })}
+                />
+              </label>
+              <label className="settings-row checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.wordWrap}
+                  onChange={(e) => apply({ ...draft, wordWrap: e.target.checked })}
+                />
+                <span>Word wrap</span>
+              </label>
+              <label className="settings-row checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.minimap}
+                  onChange={(e) => apply({ ...draft, minimap: e.target.checked })}
+                />
+                <span>Minimap</span>
+              </label>
+              <label className="settings-row checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.respectGitignore}
+                  onChange={(e) => apply({ ...draft, respectGitignore: e.target.checked })}
+                />
+                <span>Respect .gitignore</span>
+              </label>
+            </div>
+          )}
+
+          {tabId === 'ai' && (
+            <div id="settings-panel-ai" role="tabpanel" aria-labelledby="settings-tab-ai">
+              <label className="settings-row settings-row-stack">
+                <span>OpenAI API key</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="sk-…"
+                  value={openAiKey}
+                  onChange={(e) => setOpenAiKey(e.target.value)}
+                  onBlur={(e) => saveOpenAiKey(e.target.value)}
+                />
+              </label>
+              <div className="settings-row settings-row-stack">
+                <span>Aura Wire API</span>
+                <div className="settings-row-with-action">
+                  <input
+                    type="text"
+                    spellCheck={false}
+                    placeholder={LOCAL_WIRE}
+                    value={wireBaseUrl}
+                    onChange={(e) => setWireBaseUrl(e.target.value)}
+                    onBlur={(e) => saveWireBaseUrl(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="primary-btn settings-detect-btn"
+                    disabled={detectingWire}
+                    onClick={() => void detectWire()}
+                  >
+                    {detectingWire ? 'Detecting…' : 'Detect'}
+                  </button>
+                </div>
+              </div>
+              {wireStatus && <div className="settings-hint">{wireStatus}</div>}
+
+              {otherProviders.length > 0 && (
+                <div className="settings-section">
+                  <h4>Other providers</h4>
+                  {otherProviders.map((provider) => {
+                    const current = aiSettings.providers.find((p) => p.provider === provider.id)
+                    return (
+                      <div key={provider.id} className="settings-provider">
+                        <div className="settings-provider-title">
+                          <span>{provider.name}</span>
+                          {provider.requiresApiKey && (
+                            <span className="settings-provider-hint">API key</span>
+                          )}
+                        </div>
+                        {provider.requiresApiKey && (
+                          <label className="settings-row settings-row-stack">
+                            <span>API key</span>
+                            <input
+                              type="password"
+                              value={current?.apiKey ?? ''}
+                              onChange={(e) =>
+                                updateProviderSetting(provider.id, 'apiKey', e.target.value)
+                              }
+                            />
+                          </label>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tabId === 'ollama' && (
+            <OllamaSettings
+              apiKey={ollamaKey}
+              baseUrl={ollamaSettings?.baseUrl ?? (ollamaKey ? CLOUD_OLLAMA : LOCAL_OLLAMA)}
+              selectedModel={ollamaModel}
+              onApiKeyChange={setOllamaKey}
+              onApiKeyCommit={saveOllamaKey}
+              onBaseUrlChange={(value) => updateProviderSetting('ollama', 'baseUrl', value)}
+              onModelChange={setOllamaModel}
+              onModelCommit={saveOllamaModel}
+            />
+          )}
+
+          {tabId === 'git' && (
+            <div id="settings-panel-git" role="tabpanel" aria-labelledby="settings-tab-git">
+              <label className="settings-row settings-row-stack">
+                <span>GitHub PAT</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="ghp_… (git remotes + Copilot)"
+                  value={credentials.gitHubPat ?? ''}
+                  disabled={savingCredentials}
+                  onChange={(e) => setCredentials({ gitHubPat: e.target.value })}
+                  onBlur={(e) => saveGitHubPat(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+
+          {tabId === 'about' && (
+            <div
+              id="settings-panel-about"
+              role="tabpanel"
+              aria-labelledby="settings-tab-about"
+            >
+              <div className="settings-row">
+                <span>Halo IDE</span>
+                <span className="settings-about-version">v{appVersion}</span>
+              </div>
+              <p className="settings-update-status">{updateStatusText(updateState)}</p>
+              <div className="settings-actions">
+                <button
+                  className="primary-btn"
+                  disabled={
+                    !window.miniCursor?.checkForUpdates ||
+                    updateState?.status === 'checking' ||
+                    updateState?.status === 'downloading'
+                  }
+                  onClick={() => onCheckForUpdates()}
+                >
+                  Check for updates
+                </button>
+                {updateState?.status === 'downloaded' && (
+                  <button className="primary-btn" onClick={() => onInstallUpdate()}>
+                    Restart to update
+                  </button>
                 )}
               </div>
-            )
-          })}
+            </div>
+          )}
         </div>
       </div>
     </div>

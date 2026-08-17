@@ -1,0 +1,27 @@
+{
+  "id": "244e895377ce42faa9086ebfd0e58412",
+  "title": "test",
+  "createdAt": "2026-08-16T03:36:26.1905794+00:00",
+  "updatedAt": "2026-08-16T03:36:35.3389499+00:00",
+  "copilotSessionId": null,
+  "provider": "wire",
+  "model": "gpt-5",
+  "messages": [
+    {
+      "id": "a37bb91a6f734d40a2d4c476f291247c",
+      "role": "user",
+      "content": "test",
+      "createdAt": "2026-08-16T03:36:31.5634709+00:00",
+      "attachments": null,
+      "toolCalls": null
+    },
+    {
+      "id": "ce0ea53bb90d43b8b4858b3b7cb0e509",
+      "role": "assistant",
+      "content": "Test received. How can I help?",
+      "createdAt": "2026-08-16T03:36:35.338949+00:00",
+      "attachments": null,
+      "toolCalls": null
+    }
+  ]
+}

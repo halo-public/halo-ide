@@ -27,6 +27,8 @@ interface Props {
   dock: HorizontalDock
   onDockChange: (dock: HorizontalDock) => void
   onTurnChange?: (turn: ChatTurnIndicator | null) => void
+  onToolsDone?: () => void
+  showToolbar?: boolean
 }
 
 interface ChatRuntime {
@@ -50,10 +52,11 @@ const DEFAULT_PROVIDERS: ProviderOption[] = [
 
 export interface ChatPanelHandle {
   insertIntoComposer: (text: string) => void
+  startNewChat: () => void
 }
 
 export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
-  { activeFilePath, workspace, importOpen, onImportOpenChange, dock, onDockChange, onTurnChange }: Props,
+  { activeFilePath, workspace, importOpen, onImportOpenChange, dock, onDockChange, onTurnChange, onToolsDone, showToolbar = true }: Props,
   ref,
 ) {
   const [chats, setChats] = useState<ChatSummary[]>([])
@@ -552,8 +555,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
         })
         window.setTimeout(() => composerRef.current?.focus(), 0)
       },
+      startNewChat: () => {
+        void newChat()
+      },
     }),
-    [],
+    [newChat],
   )
 
   const send = async () => {
@@ -599,6 +605,8 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
         } else if (type === 'tool') {
           liveTools = upsertToolCall(liveTools, body as ChatToolCall)
           patchRuntime(chatId, { toolCalls: liveTools })
+          const call = body as ChatToolCall
+          if (call.status === 'complete' || call.status === 'error') onToolsDone?.()
         } else if (type === 'delta') {
           const chunk = (body as { content: string }).content
           streamed += chunk
@@ -666,65 +674,69 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             <option value="middle">Middle</option>
             <option value="right">Right</option>
           </select>
-          <button className="icon-btn" title="Import from Cursor" onClick={() => setImportModalOpen(true)}>
-            <Download size={16} />
-          </button>
-          <div className="chat-history-wrap" ref={historyRef}>
-            <button
-              className={`icon-btn${historyOpen ? ' active' : ''}`}
-              title="Chat history (last 3 days)"
-              onClick={() => setHistoryOpen((v) => !v)}
-            >
-              <History size={16} />
-            </button>
-            {historyOpen && (
-              <div className="chat-history-menu" role="menu">
-                <div className="chat-history-menu-title">History · last 3 days</div>
-                {chats.length === 0 && <div className="chat-history-empty">No chats yet</div>}
-                {chats.map((c) => {
-                  const isOpen = openIds.includes(c.id)
-                  const busy = runtimes[c.id]?.sending || !!runtimes[c.id]?.streaming
-                  return (
-                    <div
-                      key={c.id}
-                      className={`history-item${c.id === activeId ? ' active' : ''}`}
-                    >
-                      <button
-                        type="button"
-                        className="history-item-main"
-                        onClick={() => void reopenFromHistory(c.id)}
-                        title={isOpen ? 'Switch to open tab' : 'Reopen chat'}
-                      >
-                        <span className="name">{c.title}</span>
-                        <span className="history-meta">
-                          {busy ? 'live' : isOpen ? 'open' : formatRelative(c.updatedAt)}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="history-item-delete"
-                        title="Delete chat permanently"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void deleteChat(c.id)
-                        }}
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  )
-                })}
-                {chats.length > 0 && (
-                  <div className="chat-history-hint">
-                    Closing a tab hides it; X deletes permanently. Sessions expire after 3 days.
+          {showToolbar && (
+            <>
+              <button className="icon-btn" title="Import from Cursor" onClick={() => setImportModalOpen(true)}>
+                <Download size={16} />
+              </button>
+              <div className="chat-history-wrap" ref={historyRef}>
+                <button
+                  className={`icon-btn${historyOpen ? ' active' : ''}`}
+                  title="Chat history (last 3 days)"
+                  onClick={() => setHistoryOpen((v) => !v)}
+                >
+                  <History size={16} />
+                </button>
+                {historyOpen && (
+                  <div className="chat-history-menu" role="menu">
+                    <div className="chat-history-menu-title">History · last 3 days</div>
+                    {chats.length === 0 && <div className="chat-history-empty">No chats yet</div>}
+                    {chats.map((c) => {
+                      const isOpen = openIds.includes(c.id)
+                      const busy = runtimes[c.id]?.sending || !!runtimes[c.id]?.streaming
+                      return (
+                        <div
+                          key={c.id}
+                          className={`history-item${c.id === activeId ? ' active' : ''}`}
+                        >
+                          <button
+                            type="button"
+                            className="history-item-main"
+                            onClick={() => void reopenFromHistory(c.id)}
+                            title={isOpen ? 'Switch to open tab' : 'Reopen chat'}
+                          >
+                            <span className="name">{c.title}</span>
+                            <span className="history-meta">
+                              {busy ? 'live' : isOpen ? 'open' : formatRelative(c.updatedAt)}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="history-item-delete"
+                            title="Delete chat permanently"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void deleteChat(c.id)
+                            }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      )
+                    })}
+                    {chats.length > 0 && (
+                      <div className="chat-history-hint">
+                        Closing a tab hides it; X deletes permanently. Sessions expire after 3 days.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-          </div>
-          <button className="icon-btn" title="New chat" onClick={() => void newChat()}>
-            <Plus size={16} />
-          </button>
+              <button className="icon-btn" title="New chat" onClick={() => void newChat()}>
+                <Plus size={16} />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -825,6 +837,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             ))}
           </div>
         )}
+        {provider !== 'copilot' && chat && (
+          <div className="muted" style={{ fontSize: 11, padding: '0 8px 6px' }}>
+            Ask-only provider — it cannot edit files or run tools.
+          </div>
+        )}
         <div
           className={`composer-box${dragOver ? ' drag-over' : ''}`}
           onDragEnter={onDragEnter}
@@ -837,9 +854,11 @@ export const ChatPanel = forwardRef<ChatPanelHandle, Props>(function ChatPanel(
             ref={composerRef}
             value={input}
             placeholder={
-              chat
-                ? 'Message Copilot… (paste or drop images/files to attach)'
-                : 'Open or create a chat to message Copilot…'
+              !chat
+                ? 'Open or create a chat…'
+                : provider === 'copilot'
+                  ? 'Message Copilot… (paste or drop images/files to attach)'
+                  : `Ask ${provider}… (text only — this provider cannot run tools)`
             }
             disabled={!chat}
             onChange={(e) => setInput(e.target.value)}

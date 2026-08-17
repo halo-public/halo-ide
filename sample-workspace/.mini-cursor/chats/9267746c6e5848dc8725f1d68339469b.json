@@ -1,0 +1,10 @@
+{
+  "id": "9267746c6e5848dc8725f1d68339469b",
+  "title": "New Chat",
+  "createdAt": "2026-08-15T22:05:52.0182287+00:00",
+  "updatedAt": "2026-08-15T22:05:52.0237013+00:00",
+  "copilotSessionId": null,
+  "provider": "copilot",
+  "model": "gpt-5",
+  "messages": []
+}

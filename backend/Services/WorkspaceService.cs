@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MiniCursor.Api.Models;
 using MiniCursor.Api.Options;
@@ -9,8 +11,11 @@ public sealed class WorkspaceService
     public const string MiniIdeFolderName = ".mini-cursor";
     public const string ChatsFolderName = "chats";
     private readonly object _gate = new();
+    private readonly ConcurrentDictionary<string, long> _selfWrites = new(StringComparer.OrdinalIgnoreCase);
     private string _root;
     private GitIgnoreMatcher _ignore;
+
+    public event Action? RootChanged;
 
     public WorkspaceService(IOptions<MiniCursorOptions> options, IWebHostEnvironment env)
     {
@@ -70,6 +75,7 @@ public sealed class WorkspaceService
             _ignore = new GitIgnoreMatcher(full);
         }
 
+        RootChanged?.Invoke();
         return GetInfo();
     }
 
@@ -124,11 +130,33 @@ public sealed class WorkspaceService
         return results;
     }
 
-    public IReadOnlyList<SearchMatchDto> Search(string query, bool respectGitignore = true, int maxMatches = 200)
+    public IReadOnlyList<SearchMatchDto> Search(
+        string query,
+        bool respectGitignore = true,
+        bool regex = false,
+        bool matchCase = false,
+        string? include = null,
+        string? exclude = null,
+        int maxMatches = 200)
     {
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
+        Regex? compiled = null;
+        if (regex)
+        {
+            try
+            {
+                compiled = new Regex(query, matchCase ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException($"Invalid regular expression: {ex.Message}");
+            }
+        }
+
+        var includeGlobs = ParseGlobs(include);
+        var excludeGlobs = ParseGlobs(exclude);
         var matches = new List<SearchMatchDto>();
         var files = new List<string>();
         WalkFiles(Root, respectGitignore, 5000, files);
@@ -136,6 +164,7 @@ public sealed class WorkspaceService
         foreach (var rel in files)
         {
             if (matches.Count >= maxMatches) break;
+            if (!IsIncluded(rel, includeGlobs, excludeGlobs)) continue;
             var full = PathSafety.ResolveUnderRoot(Root, rel);
             if (!IsTextFile(full)) continue;
 
@@ -153,14 +182,89 @@ public sealed class WorkspaceService
             {
                 if (matches.Count >= maxMatches) break;
                 var line = lines[i];
-                var idx = line.IndexOf(query, StringComparison.OrdinalIgnoreCase);
-                if (idx < 0) continue;
-                var preview = line.Length > 200 ? line[..200] : line;
-                matches.Add(new SearchMatchDto(rel, i + 1, idx, preview.TrimEnd()));
+                foreach (var idx in FindMatches(line, query, compiled, matchCase))
+                {
+                    if (matches.Count >= maxMatches) break;
+                    var preview = line.Length > 200 ? line[..200] : line;
+                    matches.Add(new SearchMatchDto(rel, i + 1, idx, preview.TrimEnd()));
+                }
             }
         }
 
         return matches;
+    }
+
+    public SearchReplaceResultDto ReplaceInFiles(
+        string query,
+        string replacement,
+        bool respectGitignore = true,
+        bool regex = false,
+        bool matchCase = false,
+        string? include = null,
+        string? exclude = null)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new SearchReplaceResultDto(0, 0, []);
+
+        Regex? compiled = null;
+        if (regex)
+        {
+            try
+            {
+                compiled = new Regex(query, matchCase ? RegexOptions.None : RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException($"Invalid regular expression: {ex.Message}");
+            }
+        }
+
+        var includeGlobs = ParseGlobs(include);
+        var excludeGlobs = ParseGlobs(exclude);
+        var files = new List<string>();
+        WalkFiles(Root, respectGitignore, 5000, files);
+        var changed = new List<string>();
+        var replacements = 0;
+
+        foreach (var rel in files)
+        {
+            if (!IsIncluded(rel, includeGlobs, excludeGlobs)) continue;
+            var full = PathSafety.ResolveUnderRoot(Root, rel);
+            if (!IsTextFile(full)) continue;
+
+            string text;
+            try
+            {
+                text = File.ReadAllText(full);
+            }
+            catch
+            {
+                continue;
+            }
+
+            string next;
+            int count;
+            if (compiled is not null)
+            {
+                count = compiled.Matches(text).Count;
+                if (count == 0) continue;
+                next = compiled.Replace(text, replacement ?? "");
+            }
+            else
+            {
+                var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+                count = CountOccurrences(text, query, comparison);
+                if (count == 0) continue;
+                next = ReplaceLiteral(text, query, replacement ?? "", comparison);
+            }
+
+            File.WriteAllText(full, next);
+            NoteSelfWrite(rel);
+            replacements += count;
+            changed.Add(rel);
+        }
+
+        return new SearchReplaceResultDto(changed.Count, replacements, changed);
     }
 
     public FileContentDto ReadFile(string path)
@@ -181,7 +285,9 @@ public sealed class WorkspaceService
             Directory.CreateDirectory(parent);
 
         File.WriteAllText(full, content ?? "");
-        return new FileContentDto(PathSafety.ToRelative(Root, full), content ?? "", DetectLanguage(full));
+        var rel = PathSafety.ToRelative(Root, full);
+        NoteSelfWrite(rel);
+        return new FileContentDto(rel, content ?? "", DetectLanguage(full));
     }
 
     public FileNodeDto Create(string path, bool isDirectory)
@@ -203,6 +309,7 @@ public sealed class WorkspaceService
         }
 
         var rel = PathSafety.ToRelative(Root, full);
+        NoteSelfWrite(rel);
         return new FileNodeDto(
             Path.GetFileName(full),
             rel,
@@ -228,14 +335,20 @@ public sealed class WorkspaceService
         if (Directory.Exists(full))
         {
             Directory.Move(full, dest);
-            return new FileNodeDto(Path.GetFileName(dest), PathSafety.ToRelative(Root, dest), true, null, DateTimeOffset.UtcNow);
+            var rel = PathSafety.ToRelative(Root, dest);
+            NoteSelfWrite(PathSafety.ToRelative(Root, full));
+            NoteSelfWrite(rel);
+            return new FileNodeDto(Path.GetFileName(dest), rel, true, null, DateTimeOffset.UtcNow);
         }
 
         if (File.Exists(full))
         {
             File.Move(full, dest);
             var info = new FileInfo(dest);
-            return new FileNodeDto(Path.GetFileName(dest), PathSafety.ToRelative(Root, dest), false, info.Length, info.LastWriteTimeUtc);
+            var rel = PathSafety.ToRelative(Root, dest);
+            NoteSelfWrite(PathSafety.ToRelative(Root, full));
+            NoteSelfWrite(rel);
+            return new FileNodeDto(Path.GetFileName(dest), rel, false, info.Length, info.LastWriteTimeUtc);
         }
 
         throw new FileNotFoundException("Path not found.", path);
@@ -247,7 +360,6 @@ public sealed class WorkspaceService
         var dest = PathSafety.ResolveUnderRoot(Root, newPath);
         if (full.Equals(dest, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Source and destination are the same.");
-
         if (File.Exists(dest) || Directory.Exists(dest))
             throw new InvalidOperationException($"Destination already exists: {newPath}");
 
@@ -258,14 +370,18 @@ public sealed class WorkspaceService
         if (Directory.Exists(full))
         {
             CopyDirectory(full, dest);
-            return new FileNodeDto(Path.GetFileName(dest), PathSafety.ToRelative(Root, dest), true, null, DateTimeOffset.UtcNow);
+            var rel = PathSafety.ToRelative(Root, dest);
+            NoteSelfWrite(rel);
+            return new FileNodeDto(Path.GetFileName(dest), rel, true, null, Directory.GetLastWriteTimeUtc(dest));
         }
 
         if (File.Exists(full))
         {
             File.Copy(full, dest);
             var info = new FileInfo(dest);
-            return new FileNodeDto(Path.GetFileName(dest), PathSafety.ToRelative(Root, dest), false, info.Length, info.LastWriteTimeUtc);
+            var rel = PathSafety.ToRelative(Root, dest);
+            NoteSelfWrite(rel);
+            return new FileNodeDto(Path.GetFileName(dest), rel, false, info.Length, info.LastWriteTimeUtc);
         }
 
         throw new FileNotFoundException("Path not found.", path);
@@ -279,12 +395,14 @@ public sealed class WorkspaceService
 
         if (Directory.Exists(full))
         {
+            NoteSelfWrite(PathSafety.ToRelative(Root, full));
             Directory.Delete(full, recursive: true);
             return;
         }
 
         if (File.Exists(full))
         {
+            NoteSelfWrite(PathSafety.ToRelative(Root, full));
             File.Delete(full);
             return;
         }
@@ -293,6 +411,105 @@ public sealed class WorkspaceService
     }
 
     public string ResolvePath(string path) => PathSafety.ResolveUnderRoot(Root, path);
+
+    public bool IsRecentSelfWrite(string relativePath)
+    {
+        var key = relativePath.Replace('\\', '/');
+        if (!_selfWrites.TryGetValue(key, out var stamp)) return false;
+        if (Environment.TickCount64 - stamp < 800) return true;
+        _selfWrites.TryRemove(key, out _);
+        return false;
+    }
+
+    private void NoteSelfWrite(string relativePath)
+    {
+        _selfWrites[relativePath.Replace('\\', '/')] = Environment.TickCount64;
+    }
+
+    private static List<string> ParseGlobs(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return [];
+        return value
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(g => g.Length > 0)
+            .ToList();
+    }
+
+    private static bool IsIncluded(string relativePath, List<string> include, List<string> exclude)
+    {
+        var rel = relativePath.Replace('\\', '/');
+        if (exclude.Any(g => MatchesGlob(rel, g))) return false;
+        if (include.Count == 0) return true;
+        return include.Any(g => MatchesGlob(rel, g));
+    }
+
+    private static bool MatchesGlob(string relativePath, string glob)
+    {
+        var pattern = glob.Replace('\\', '/').Trim();
+        if (string.IsNullOrEmpty(pattern)) return false;
+        if (!pattern.Contains('/') && !pattern.StartsWith("**", StringComparison.Ordinal))
+            pattern = "**/" + pattern;
+        var escaped = Regex.Escape(pattern)
+            .Replace("\\*\\*", "§§")
+            .Replace("\\*", "[^/]*")
+            .Replace("\\?", "[^/]")
+            .Replace("§§", ".*");
+        return Regex.IsMatch(relativePath.Replace('\\', '/'), $"^{escaped}$", RegexOptions.IgnoreCase);
+    }
+
+    private static IEnumerable<int> FindMatches(string line, string query, Regex? compiled, bool matchCase)
+    {
+        if (compiled is not null)
+        {
+            foreach (Match match in compiled.Matches(line))
+                yield return match.Index;
+            yield break;
+        }
+
+        var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var start = 0;
+        while (start <= line.Length)
+        {
+            var idx = line.IndexOf(query, start, comparison);
+            if (idx < 0) yield break;
+            yield return idx;
+            start = idx + Math.Max(1, query.Length);
+        }
+    }
+
+    private static int CountOccurrences(string text, string query, StringComparison comparison)
+    {
+        var count = 0;
+        var start = 0;
+        while (start <= text.Length)
+        {
+            var idx = text.IndexOf(query, start, comparison);
+            if (idx < 0) break;
+            count++;
+            start = idx + Math.Max(1, query.Length);
+        }
+        return count;
+    }
+
+    private static string ReplaceLiteral(string text, string query, string replacement, StringComparison comparison)
+    {
+        if (comparison == StringComparison.Ordinal) return text.Replace(query, replacement, StringComparison.Ordinal);
+        var builder = new System.Text.StringBuilder();
+        var start = 0;
+        while (start <= text.Length)
+        {
+            var idx = text.IndexOf(query, start, comparison);
+            if (idx < 0)
+            {
+                builder.Append(text.AsSpan(start));
+                break;
+            }
+            builder.Append(text.AsSpan(start, idx - start));
+            builder.Append(replacement);
+            start = idx + query.Length;
+        }
+        return builder.ToString();
+    }
 
     private void WalkFiles(string dir, bool respectGitignore, int maxFiles, List<string> results)
     {

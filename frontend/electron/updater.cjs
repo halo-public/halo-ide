@@ -70,7 +70,7 @@ function setupAutoUpdate({ app, dialog, getMainWindow, beforeInstall }) {
     const result = await dialog.showMessageBox(win ?? undefined, {
       type: 'info',
       title: 'Update ready',
-      message: `Mini Cursor ${info.version} is ready to install.`,
+      message: `Halo IDE ${info.version} is ready to install.`,
       detail: 'The app will restart to apply the update.',
       buttons: ['Restart now', 'Later'],
       defaultId: 0,

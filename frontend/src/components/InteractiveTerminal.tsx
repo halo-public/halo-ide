@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { wsUrl } from '../api/client'
+import { getTheme, onThemeChange, terminalTheme } from '../themes'
 
 interface Props {
   active: boolean
@@ -47,11 +48,7 @@ export const InteractiveTerminal = forwardRef<InteractiveTerminalHandle, Props>(
       convertEol: true,
       fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
       fontSize: 12,
-      theme: {
-        background: '#12151b',
-        foreground: '#c8d0dc',
-        cursor: '#58a6ff',
-      },
+      theme: terminalTheme(getTheme(document.documentElement.dataset.theme)),
       cursorBlink: true,
     })
     const fit = new FitAddon()
@@ -104,8 +101,12 @@ export const InteractiveTerminal = forwardRef<InteractiveTerminalHandle, Props>(
       sendResize()
     }
     window.addEventListener('resize', onWindowResize)
+    const stopTheme = onThemeChange((theme) => {
+      term.options.theme = terminalTheme(theme)
+    })
 
     return () => {
+      stopTheme()
       window.removeEventListener('resize', onWindowResize)
       wsRef.current?.close()
       term.dispose()

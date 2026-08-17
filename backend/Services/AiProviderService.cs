@@ -76,6 +76,7 @@ public sealed class AiProviderService
         Directory.CreateDirectory(root);
         _settingsPath = Path.Combine(root, "ai-settings.json");
         _settings = LoadSettings();
+        _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<IReadOnlyList<ProviderOptionDto>> ListProvidersAsync(CancellationToken cancellationToken = default)
@@ -115,7 +116,7 @@ public sealed class AiProviderService
         var providers = ProviderOptions.Select(option =>
         {
             var provider = GetProviderSettings(option.Id);
-            return new ProviderSettingsDto(option.Id, provider.ApiKey, provider.BaseUrl);
+            return new ProviderSettingsDto(option.Id, provider.ApiKey, provider.BaseUrl, provider.Model);
         }).ToList();
 
         return new AiSettingsDto(providers);
@@ -137,7 +138,8 @@ public sealed class AiProviderService
             mapped[option.Id] = new ProviderSettingsRecord
             {
                 ApiKey = incoming?.ApiKey?.Trim() ?? current.ApiKey,
-                BaseUrl = baseUrl
+                BaseUrl = baseUrl,
+                Model = incoming?.Model?.Trim() ?? current.Model
             };
         }
 
@@ -282,6 +284,170 @@ public sealed class AiProviderService
             .ToList();
     }
 
+    public async IAsyncEnumerable<OllamaPullEventDto> PullOllamaAsync(
+        string model,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var name = RequireOllamaModel(model);
+        using var request = CreateOllamaRequest(HttpMethod.Post, "/api/pull");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new { model = name, name, stream = true }),
+            Encoding.UTF8,
+            "application/json");
+
+        using var response = await SendOllamaAsync(request, "pull", cancellationToken);
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            yield return ParsePullEvent(line);
+        }
+    }
+
+    public async Task<OllamaTestResultDto> TestOllamaAsync(string model, CancellationToken cancellationToken = default)
+    {
+        var name = RequireOllamaModel(model);
+        using var request = CreateOllamaRequest(HttpMethod.Post, "/api/chat");
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new
+            {
+                model = name,
+                stream = false,
+                messages = new[] { new { role = "user", content = "Reply with exactly the word pong." } },
+                options = new { num_predict = 24 }
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        var started = Environment.TickCount64;
+        using var response = await SendOllamaAsync(request, "test", cancellationToken);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var elapsed = (int)Math.Min(int.MaxValue, Environment.TickCount64 - started);
+        var reply = ReadOllamaMessage(json);
+        if (string.IsNullOrWhiteSpace(reply))
+        {
+            return new OllamaTestResultDto(false, null, "The model returned an empty reply.", elapsed);
+        }
+
+        return new OllamaTestResultDto(true, reply.Trim(), "Model responded.", elapsed);
+    }
+
+    private HttpRequestMessage CreateOllamaRequest(HttpMethod method, string path)
+    {
+        var settings = GetProviderSettings(OllamaProvider);
+        var baseUrl = ResolveOllamaBaseUrl(settings);
+        var request = new HttpRequestMessage(method, $"{baseUrl}{path}");
+        if (!string.IsNullOrWhiteSpace(settings.ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey.Trim());
+        return request;
+    }
+
+    private async Task<HttpResponseMessage> SendOllamaAsync(
+        HttpRequestMessage request,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new InvalidOperationException($"Could not reach Ollama to {action}. {ex.Message}");
+        }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Ollama {action} timed out. {ex.Message}");
+        }
+
+        if (response.IsSuccessStatusCode)
+            return response;
+
+        var status = (int)response.StatusCode;
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        response.Dispose();
+        var detail = TryReadOllamaError(body);
+        throw new InvalidOperationException(
+            string.IsNullOrWhiteSpace(detail) ? $"Ollama {action} returned {status}." : $"Ollama {action} returned {status}: {detail}");
+    }
+
+    private static string RequireOllamaModel(string model)
+    {
+        var name = model?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(name))
+            throw new InvalidOperationException("Enter an Ollama model name.");
+        return name;
+    }
+
+    private static OllamaPullEventDto ParsePullEvent(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            var error = root.TryGetProperty("error", out var errEl) && errEl.ValueKind == JsonValueKind.String
+                ? errEl.GetString()
+                : null;
+            if (!string.IsNullOrWhiteSpace(error))
+                throw new InvalidOperationException(error);
+
+            return new OllamaPullEventDto(
+                root.TryGetProperty("status", out var status) ? status.GetString() : null,
+                null,
+                root.TryGetProperty("total", out var total) && total.TryGetInt64(out var totalValue) ? totalValue : null,
+                root.TryGetProperty("completed", out var done) && done.TryGetInt64(out var doneValue) ? doneValue : null,
+                root.TryGetProperty("digest", out var digest) ? digest.GetString() : null);
+        }
+        catch (JsonException)
+        {
+            return new OllamaPullEventDto(line);
+        }
+    }
+
+    private static string? ReadOllamaMessage(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("message", out var message)
+                && message.TryGetProperty("content", out var content)
+                && content.ValueKind == JsonValueKind.String)
+            {
+                return content.GetString();
+            }
+
+            if (doc.RootElement.TryGetProperty("response", out var response)
+                && response.ValueKind == JsonValueKind.String)
+            {
+                return response.GetString();
+            }
+        }
+        catch (JsonException)
+        {
+            /* ignore */
+        }
+
+        return null;
+    }
+
+    private static string? TryReadOllamaError(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
+                return error.GetString();
+        }
+        catch (JsonException)
+        {
+            /* ignore */
+        }
+
+        return string.IsNullOrWhiteSpace(body) ? null : body.Trim();
+    }
+
     private static string ResolveOllamaBaseUrl(ProviderSettingsRecord settings)
     {
         var configured = settings.BaseUrl?.Trim().TrimEnd('/');
@@ -333,6 +499,7 @@ public sealed class AiProviderService
     {
         public string? ApiKey { get; set; }
         public string? BaseUrl { get; set; }
+        public string? Model { get; set; }
     }
 
     private sealed class OllamaTagsResponse

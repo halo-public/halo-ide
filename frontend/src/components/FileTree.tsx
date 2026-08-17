@@ -7,11 +7,14 @@ import {
   Folder,
   FolderPlus,
   Pencil,
+  Puzzle,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { api } from '../api/client'
 import type { FileNode } from '../api/types'
+import { usePluginHost } from '../plugins/PluginHostContext'
+import { ContextMenu, type ContextMenuEntry } from './ContextMenu'
 
 interface Props {
   selectedPath?: string
@@ -19,6 +22,7 @@ interface Props {
   refreshKey: number
   onOpenFile: (path: string) => void
   onRevealFolder?: string | null
+  showToolbar?: boolean
 }
 
 type Clipboard =
@@ -38,6 +42,7 @@ export function FileTree({
   refreshKey,
   onOpenFile,
   onRevealFolder,
+  showToolbar = true,
 }: Props) {
   const [roots, setRoots] = useState<FileNode[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -45,7 +50,7 @@ export function FileTree({
   const [clipboard, setClipboard] = useState<Clipboard>(null)
   const [editing, setEditing] = useState<{ path: string; name: string } | null>(null)
   const [bump, setBump] = useState(0)
-  const menuRef = useRef<HTMLDivElement>(null)
+  const plugins = usePluginHost()
 
   const reload = () => setBump((b) => b + 1)
 
@@ -55,22 +60,6 @@ export function FileTree({
       .then(setRoots)
       .catch((e: Error) => setError(e.message))
   }, [respectGitignore, refreshKey, bump])
-
-  useEffect(() => {
-    if (!menu) return
-    const onPointer = (event: globalThis.MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenu(null)
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenu(null)
-    }
-    window.addEventListener('mousedown', onPointer)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onPointer)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [menu])
 
   const parentOf = (path: string) => {
     const parts = path.split('/')
@@ -133,18 +122,134 @@ export function FileTree({
     setMenu({ x: e.clientX, y: e.clientY, node, parentPath })
   }
 
+  const isDirectory = menu?.node?.isDirectory ?? true
+  const menuPath = menu?.node?.path ?? ''
+  const pluginEntries: ContextMenuEntry[] = menu
+    ? plugins.itemsFor({ location: 'explorer', path: menuPath, isDirectory }).map((item) => ({
+        type: 'item' as const,
+        id: `plugin:${item.pluginId}:${item.id}`,
+        label: item.title,
+        icon: <Puzzle size={14} />,
+        onSelect: () =>
+          plugins.runItem(item, {
+            location: 'explorer',
+            path: menuPath,
+            isDirectory,
+            language: isDirectory ? undefined : plugins.detectLanguage(menuPath),
+          }),
+      }))
+    : []
+
+  const pluginTitleEntries = plugins.titleItemsFor({
+    location: 'explorer',
+    path: '',
+    isDirectory: true,
+  })
+
+  const menuEntries: ContextMenuEntry[] = menu
+    ? [
+        {
+          type: 'item',
+          id: 'new-file',
+          label: 'New File',
+          icon: <FilePlus size={14} />,
+          onSelect: () => {
+            void createItem(menu.node?.isDirectory ? menu.node.path : menu.parentPath, false)
+          },
+        },
+        {
+          type: 'item',
+          id: 'new-folder',
+          label: 'New Folder',
+          icon: <FolderPlus size={14} />,
+          onSelect: () => {
+            void createItem(menu.node?.isDirectory ? menu.node.path : menu.parentPath, true)
+          },
+        },
+        ...(menu.node
+          ? ([
+              {
+                type: 'item',
+                id: 'rename',
+                label: 'Rename',
+                icon: <Pencil size={14} />,
+                onSelect: () => {
+                  void renameItem(menu.node!)
+                },
+              },
+              {
+                type: 'item',
+                id: 'copy',
+                label: 'Copy',
+                icon: <Copy size={14} />,
+                onSelect: () => {
+                  setClipboard({
+                    mode: 'copy',
+                    path: menu.node!.path,
+                    isDirectory: menu.node!.isDirectory,
+                  })
+                },
+              },
+              {
+                type: 'item',
+                id: 'delete',
+                label: 'Delete',
+                icon: <Trash2 size={14} />,
+                onSelect: () => {
+                  void deleteItem(menu.node!)
+                },
+              },
+            ] satisfies ContextMenuEntry[])
+          : []),
+        ...(clipboard
+          ? ([
+              {
+                type: 'item',
+                id: 'paste',
+                label: 'Paste',
+                onSelect: () => {
+                  const parent = menu.node?.isDirectory ? menu.node.path : menu.parentPath
+                  void pasteItem(parent)
+                },
+              },
+            ] satisfies ContextMenuEntry[])
+          : []),
+        ...(pluginEntries.length
+          ? ([{ type: 'separator', id: 'plugins' }, ...pluginEntries] satisfies ContextMenuEntry[])
+          : []),
+      ]
+    : []
+
   if (error) return <div className="error-text" style={{ padding: 8 }}>{error}</div>
 
   return (
     <div className="file-tree" onContextMenu={(e) => openMenu(e, null, '')}>
-      <div className="tree-toolbar">
-        <button className="icon-btn" title="New File" onClick={() => void createItem('', false)}>
-          <FilePlus size={14} />
-        </button>
-        <button className="icon-btn" title="New Folder" onClick={() => void createItem('', true)}>
-          <FolderPlus size={14} />
-        </button>
-      </div>
+      {showToolbar && (
+        <div className="tree-toolbar">
+          <button className="icon-btn" title="New File" onClick={() => void createItem('', false)}>
+            <FilePlus size={14} />
+          </button>
+          <button className="icon-btn" title="New Folder" onClick={() => void createItem('', true)}>
+            <FolderPlus size={14} />
+          </button>
+          {pluginTitleEntries.map((item) => (
+            <button
+              key={`${item.pluginId}:${item.id}`}
+              className="icon-btn"
+              title={item.title}
+              onClick={() =>
+                plugins.runItem(item, {
+                  location: 'explorer',
+                  path: '',
+                  isDirectory: true,
+                })
+              }
+            >
+              <Puzzle size={14} />
+            </button>
+          ))}
+        </div>
+      )}
       {!roots.length && <div className="muted" style={{ padding: 8 }}>No files</div>}
       {roots.map((node) => (
         <TreeNode
@@ -162,74 +267,12 @@ export function FileTree({
         />
       ))}
       {menu && (
-        <div
-          className="context-menu"
-          ref={menuRef}
-          style={{ left: menu.x, top: menu.y }}
-          role="menu"
-        >
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null)
-              void createItem(menu.node?.isDirectory ? menu.node.path : menu.parentPath, false)
-            }}
-          >
-            <FilePlus size={14} /> New File
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => {
-              setMenu(null)
-              void createItem(menu.node?.isDirectory ? menu.node.path : menu.parentPath, true)
-            }}
-          >
-            <FolderPlus size={14} /> New Folder
-          </button>
-          {menu.node && (
-            <>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null)
-                  void renameItem(menu.node!)
-                }}
-              >
-                <Pencil size={14} /> Rename
-              </button>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setClipboard({ mode: 'copy', path: menu.node!.path, isDirectory: menu.node!.isDirectory })
-                  setMenu(null)
-                }}
-              >
-                <Copy size={14} /> Copy
-              </button>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenu(null)
-                  void deleteItem(menu.node!)
-                }}
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-            </>
-          )}
-          {clipboard && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                const parent = menu.node?.isDirectory ? menu.node.path : menu.parentPath
-                setMenu(null)
-                void pasteItem(parent)
-              }}
-            >
-              Paste
-            </button>
-          )}
-        </div>
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          entries={menuEntries}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   )

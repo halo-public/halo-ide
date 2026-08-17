@@ -29,6 +29,21 @@ export interface SearchMatch {
   preview: string
 }
 
+export interface SearchReplaceResult {
+  fileCount: number
+  replacementCount: number
+  paths: string[]
+}
+
+export interface SearchQuery {
+  q: string
+  gitignore?: boolean
+  regex?: boolean
+  matchCase?: boolean
+  include?: string
+  exclude?: string
+}
+
 export interface LaunchConfig {
   name: string
   type: string
@@ -36,6 +51,7 @@ export interface LaunchConfig {
   program?: string | null
   cwd?: string | null
   args?: string[] | null
+  preLaunchTask?: string | null
 }
 
 export interface TaskConfig {
@@ -166,6 +182,7 @@ export interface ProviderSettings {
   provider: string
   apiKey?: string | null
   baseUrl?: string | null
+  model?: string | null
 }
 
 export interface AiSettings {
@@ -177,6 +194,21 @@ export interface AuraWireDetectResult {
   running: boolean
   baseUrl?: string | null
   message?: string | null
+}
+
+export interface OllamaPullEvent {
+  status?: string | null
+  error?: string | null
+  total?: number | null
+  completed?: number | null
+  digest?: string | null
+}
+
+export interface OllamaTestResult {
+  ok: boolean
+  reply?: string | null
+  message?: string | null
+  elapsedMs: number
 }
 
 export interface CredentialsSettings {
@@ -215,4 +247,20 @@ export interface CursorChatImportCandidate {
   createdAt: string
   updatedAt: string
   mode?: string | null
+}
+
+export interface PluginInfo {
+  id: string
+  name: string
+  version: string
+  main: string
+  path: string
+}
+
+export interface PluginSource {
+  id: string
+  name: string
+  version: string
+  main: string
+  source: string
 }

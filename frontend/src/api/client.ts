@@ -12,12 +12,18 @@ import type {
   LaunchRun,
   GitSidebar,
   MessageAttachmentRequest,
+  PluginInfo,
+  PluginSource,
   ProviderOption,
   SearchMatch,
+  SearchQuery,
+  SearchReplaceResult,
   TaskConfig,
   WorkspaceInfo,
   WorkspaceChatInfo,
   AuraWireDetectResult,
+  OllamaPullEvent,
+  OllamaTestResult,
 } from './types'
 
 function apiUrl(path: string): string {
@@ -76,8 +82,29 @@ export const api = {
     ),
   listTree: (gitignore = true) =>
     request<string[]>(`/api/files/tree?gitignore=${gitignore}`),
-  search: (q: string, gitignore = true) =>
-    request<SearchMatch[]>(`/api/search?q=${encodeURIComponent(q)}&gitignore=${gitignore}`),
+  search: (query: SearchQuery) => {
+    const params = new URLSearchParams()
+    params.set('q', query.q)
+    params.set('gitignore', String(query.gitignore ?? true))
+    if (query.regex) params.set('regex', 'true')
+    if (query.matchCase) params.set('matchCase', 'true')
+    if (query.include) params.set('include', query.include)
+    if (query.exclude) params.set('exclude', query.exclude)
+    return request<SearchMatch[]>(`/api/search?${params.toString()}`)
+  },
+  replaceInFiles: (query: SearchQuery & { replacement: string }) =>
+    request<SearchReplaceResult>('/api/search/replace', {
+      method: 'POST',
+      body: JSON.stringify({
+        query: query.q,
+        replacement: query.replacement,
+        gitignore: query.gitignore ?? true,
+        regex: query.regex ?? false,
+        matchCase: query.matchCase ?? false,
+        include: query.include,
+        exclude: query.exclude,
+      }),
+    }),
   readFile: (path: string) =>
     request<FileContent>(`/api/files/content?path=${encodeURIComponent(path)}`),
   writeFile: (path: string, content: string) =>
@@ -102,6 +129,8 @@ export const api = {
     }),
   deletePath: (path: string) =>
     request<void>(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  listPlugins: () => request<PluginInfo[]>('/api/plugins'),
+  getPlugin: (id: string) => request<PluginSource>(`/api/plugins/${encodeURIComponent(id)}`),
   getLaunchConfigs: () => request<LaunchConfig[]>('/api/launch'),
   getTasks: () => request<TaskConfig[]>('/api/tasks'),
   startTask: (name: string) =>
@@ -114,6 +143,8 @@ export const api = {
   stopLaunch: (id: string) =>
     request<void>(`/api/launch/runs/${id}/stop`, { method: 'POST' }),
   getGitStatus: () => request<GitSidebar>('/api/git/status'),
+  getGitFile: (path: string) =>
+    request<FileContent>(`/api/git/file?path=${encodeURIComponent(path)}`),
   runGitOperation: (operation: string, argument?: string, paths?: string[]) =>
     request<LaunchRun>('/api/git/operations', {
       method: 'POST',
@@ -124,6 +155,50 @@ export const api = {
   detectAuraWire: () =>
     request<AuraWireDetectResult>('/api/ai/wire/detect', { method: 'POST' }),
   listModels: (provider: string) => request<CopilotModel[]>(`/api/ai/models?provider=${encodeURIComponent(provider)}`),
+  pullOllama: async (model: string, onProgress?: (event: OllamaPullEvent) => void) => {
+    const res = await fetch(apiUrl('/api/ollama/pull'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    })
+    if (!res.ok || !res.body) {
+      let message = res.statusText
+      try {
+        const body = await res.json()
+        message = body.message ?? message
+      } catch {
+        /* ignore */
+      }
+      throw new Error(message || 'Pull failed')
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        const evt = JSON.parse(trimmed) as OllamaPullEvent
+        if (evt.error) throw new Error(evt.error)
+        onProgress?.(evt)
+      }
+    }
+    if (buffer.trim()) {
+      const evt = JSON.parse(buffer.trim()) as OllamaPullEvent
+      if (evt.error) throw new Error(evt.error)
+      onProgress?.(evt)
+    }
+  },
+  testOllama: (model: string) =>
+    request<OllamaTestResult>('/api/ollama/test', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    }),
   getAiSettings: () => request<AiSettings>('/api/settings/ai'),
   saveAiSettings: (settings: AiSettings) =>
     request<AiSettings>('/api/settings/ai', {

@@ -1,4 +1,4 @@
-# Builds a portable Mini Cursor folder with Mini Cursor.exe (no installer).
+# Builds a portable Halo IDE folder with Halo IDE.exe (no installer).
 # Output: frontend/release/win-unpacked/
 #
 # Usage:

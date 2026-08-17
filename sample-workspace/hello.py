@@ -1,2 +1,2 @@
-print("Hello from Mini Cursor!")
+print("Hello from Halo IDE!")
 print("Launch configs are working.")

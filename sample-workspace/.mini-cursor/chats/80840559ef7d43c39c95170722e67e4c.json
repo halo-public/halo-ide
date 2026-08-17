@@ -1,0 +1,27 @@
+{
+  "id": "80840559ef7d43c39c95170722e67e4c",
+  "title": "what is your name?",
+  "createdAt": "2026-08-16T03:57:44.6052369+00:00",
+  "updatedAt": "2026-08-16T03:58:01.71849+00:00",
+  "copilotSessionId": null,
+  "provider": "wire",
+  "model": "gpt-5",
+  "messages": [
+    {
+      "id": "50373da44e6f41b7bb57be9a876c3698",
+      "role": "user",
+      "content": "what is your name?",
+      "createdAt": "2026-08-16T03:57:59.3696411+00:00",
+      "attachments": null,
+      "toolCalls": null
+    },
+    {
+      "id": "e19fbfe9f1a840eab8dca8744acdf61c",
+      "role": "assistant",
+      "content": "I\u2019m ChatGPT.",
+      "createdAt": "2026-08-16T03:58:01.7184892+00:00",
+      "attachments": null,
+      "toolCalls": null
+    }
+  ]
+}

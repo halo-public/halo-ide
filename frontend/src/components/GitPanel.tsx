@@ -15,6 +15,9 @@ import type { GitRef, GitSidebar, GitStatusFile, LaunchRun } from '../api/types'
 
 interface Props {
   onOutput: (text: string, run: LaunchRun | null) => void
+  refreshKey?: number
+  onOpenDiff?: (path: string) => void
+  showToolbar?: boolean
 }
 
 const POLL_INTERVAL_MS = 500
@@ -31,7 +34,7 @@ function branchGroup(branches: GitRef[], remote: boolean) {
   return branches.filter((branch) => branch.isRemote === remote)
 }
 
-export function GitPanel({ onOutput }: Props) {
+export function GitPanel({ onOutput, refreshKey = 0, onOpenDiff, showToolbar = true }: Props) {
   const [sidebar, setSidebar] = useState<GitSidebar | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -63,7 +66,7 @@ export function GitPanel({ onOutput }: Props) {
 
   useEffect(() => {
     void refresh()
-  }, [])
+  }, [refreshKey])
 
   useEffect(() => {
     if (!run || run.status !== 'running') return
@@ -136,20 +139,22 @@ export function GitPanel({ onOutput }: Props) {
 
   return (
     <div className="git-panel">
-      <div className="git-toolbar git-toolbar-main">
-        <button className="primary-btn" onClick={() => void runOperation('fetch')} disabled={busy || run?.status === 'running'}>
-          <RefreshCw size={14} />
-          Fetch
-        </button>
-        <button className="primary-btn" onClick={() => void runOperation('pull')} disabled={busy || run?.status === 'running'}>
-          <ArrowDownToLine size={14} />
-          Pull
-        </button>
-        <button className="primary-btn" onClick={() => void runOperation('push')} disabled={busy || run?.status === 'running'}>
-          <ArrowUpToLine size={14} />
-          Push
-        </button>
-      </div>
+      {showToolbar && (
+        <div className="git-toolbar git-toolbar-main">
+          <button className="primary-btn" onClick={() => void runOperation('fetch')} disabled={busy || run?.status === 'running'}>
+            <RefreshCw size={14} />
+            Fetch
+          </button>
+          <button className="primary-btn" onClick={() => void runOperation('pull')} disabled={busy || run?.status === 'running'}>
+            <ArrowDownToLine size={14} />
+            Pull
+          </button>
+          <button className="primary-btn" onClick={() => void runOperation('push')} disabled={busy || run?.status === 'running'}>
+            <ArrowUpToLine size={14} />
+            Push
+          </button>
+        </div>
+      )}
 
       <div className="git-status-card">
         <div className="git-branch-row">
@@ -293,7 +298,17 @@ export function GitPanel({ onOutput }: Props) {
                     checked={selectedSet.has(file.path)}
                     onChange={() => toggleSelection(file.path)}
                   />
-                  <div className="git-file-path">{file.path}</div>
+                  <div
+                    className="git-file-path"
+                    role="button"
+                    title="Open diff vs HEAD"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      onOpenDiff?.(file.path)
+                    }}
+                  >
+                    {file.path}
+                  </div>
                 </div>
                 <div className="git-file-state">
                   <span>{statusLabel(file)}</span>

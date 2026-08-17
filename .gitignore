@@ -7,7 +7,7 @@
 *.user
 *.userosscache
 *.sln.docstates
-.mini-cursor/
+.mini-cursor/chats/
 
 # Build results
 [Dd]ebug/

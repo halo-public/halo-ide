@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Mini Cursor",
+      "name": "Halo IDE",
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "npm",
@@ -14,28 +14,28 @@
       "console": "integratedTerminal"
     },
     {
-      "name": "Build Mini Cursor EXE",
+      "name": "Build Halo IDE EXE",
       "type": "node-terminal",
       "request": "launch",
       "command": ".\\scripts\\build-exe.ps1",
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": "Release Mini Cursor",
+      "name": "Release Halo IDE",
       "type": "node-terminal",
       "request": "launch",
       "command": ".\\scripts\\release.ps1",
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": "Build Mini Cursor Installer",
+      "name": "Build Halo IDE Installer",
       "type": "node-terminal",
       "request": "launch",
       "command": ".\\scripts\\build-installer.ps1",
       "cwd": "${workspaceFolder}"
     },
     {
-      "name": "Mini Cursor API (standalone)",
+      "name": "Halo IDE API (standalone)",
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build-api",

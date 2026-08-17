@@ -4,6 +4,7 @@ const path = require('path')
 const { API_BASE, startApi, stopApi } = require('./backend.cjs')
 const { loadWindowState, sanitizeState, trackWindowState } = require('./window-state.cjs')
 const { getMostRecent, loadMru, rememberWorkspace } = require('./mru.cjs')
+const { installDefaultMenu, registerMenuIpc } = require('./menu.cjs')
 const { setupAutoUpdate } = require('./updater.cjs')
 
 const isDev = !app.isPackaged
@@ -83,10 +84,10 @@ async function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#0f1115',
-    title: 'Mini Cursor',
+    title: 'Halo IDE',
     icon: ICON_PATH,
     show: false,
-    autoHideMenuBar: true,
+    autoHideMenuBar: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -115,6 +116,8 @@ async function createWindow() {
 }
 
 function registerIpc() {
+  registerMenuIpc(ipcMain)
+
   ipcMain.handle('workspace:openFolder', async () => {
     const parent = BrowserWindow.getFocusedWindow() || mainWindow
     const result = await dialog.showOpenDialog(parent ?? undefined, {
@@ -156,10 +159,11 @@ async function shutdownAndQuit() {
 
 app.whenReady().then(async () => {
   if (process.platform === 'win32') {
-    app.setAppUserModelId('com.minicursor.app')
+    app.setAppUserModelId('com.haloide.app')
   }
 
   registerIpc()
+  installDefaultMenu()
 
   updater = setupAutoUpdate({
     app,
@@ -181,7 +185,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[mini-cursor] failed to start API', err)
     dialog.showErrorBox(
-      'Mini Cursor',
+      'Halo IDE',
       `Could not start the backend API.\n\n${err instanceof Error ? err.message : String(err)}`,
     )
     app.exit(1)

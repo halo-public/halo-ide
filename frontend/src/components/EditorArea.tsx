@@ -1,11 +1,15 @@
 import Editor, { DiffEditor, type OnMount } from '@monaco-editor/react'
+import { Columns2, Diff, ListTree, Puzzle, Save, X } from 'lucide-react'
 import type { editor as MonacoEditor } from 'monaco-editor'
-import { Columns2, Diff, ListTree, Save, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { EditorCursor, FileContent, OutlineSymbol, ProblemItem } from '../api/types'
 import { extractOutline } from '../editorUtils'
+import { usePluginHost } from '../plugins/PluginHostContext'
+import { applyPluginLanguages } from '../plugins/languages'
 import type { EditorSettings } from '../settingsPrefs'
+import { monacoThemeId, registerMonacoThemes } from '../themes'
+import { ContextMenu, type ContextMenuEntry } from './ContextMenu'
 
 function splitPath(path: string): string[] {
   return path.replace(/\\/g, '/').split('/').filter(Boolean)
@@ -20,6 +24,19 @@ export interface OpenTab {
 }
 
 export type EditorGroupId = 'primary' | 'secondary'
+
+type TabMenuState = {
+  x: number
+  y: number
+  path: string
+  language: string
+} | null
+
+type AttachedEditor = {
+  group: EditorGroupId
+  editor: MonacoEditor.IStandaloneCodeEditor
+  disposables: { dispose(): void }[]
+}
 
 interface Props {
   tabs: OpenTab[]
@@ -42,6 +59,8 @@ interface Props {
   onRevealRequest?: { path: string; line: number; column?: number } | null
   onRevealHandled?: () => void
   onBreadcrumbFolder?: (folderPath: string) => void
+  formatRequest?: number
+  showToolbar?: boolean
 }
 
 export function EditorArea({
@@ -65,14 +84,26 @@ export function EditorArea({
   onRevealRequest,
   onRevealHandled,
   onBreadcrumbFolder,
+  formatRequest,
+  showToolbar = true,
 }: Props) {
   const primary = tabs.find((t) => t.path === activePath)
   const secondary = tabs.find((t) => t.path === secondaryPath)
   const focused = activeGroup === 'secondary' && splitEnabled ? secondary : primary
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tabMenu, setTabMenu] = useState<TabMenuState>(null)
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
   const markersRef = useRef<Map<string, ProblemItem[]>>(new Map())
+  const attachedRef = useRef<AttachedEditor[]>([])
+  const primaryRef = useRef(primary)
+  const secondaryRef = useRef(secondary)
+  primaryRef.current = primary
+  secondaryRef.current = secondary
+  const plugins = usePluginHost()
+  const pluginsRef = useRef(plugins)
+  pluginsRef.current = plugins
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null)
 
   const outline = useMemo(
     () => (focused ? extractOutline(focused.content, focused.language) : []),
@@ -101,6 +132,11 @@ export function EditorArea({
     onRevealHandled?.()
   }, [onRevealRequest, focused?.path, onRevealHandled])
 
+  useEffect(() => {
+    if (!formatRequest) return
+    void editorRef.current?.getAction('editor.action.formatDocument')?.run()
+  }, [formatRequest])
+
   const save = async (tab?: OpenTab) => {
     if (!tab || !tab.dirty) return
     setSaving(true)
@@ -120,10 +156,82 @@ export function EditorArea({
     onProblems(all)
   }
 
+  const bindPluginActions = (attached: AttachedEditor) => {
+    for (const d of attached.disposables) d.dispose()
+    attached.disposables = []
+    const host = pluginsRef.current
+    const tab = attached.group === 'secondary' ? secondaryRef.current : primaryRef.current
+    if (!tab) return
+    host.itemsFor({
+      location: 'editor',
+      path: tab.path,
+      isDirectory: false,
+      language: tab.language,
+    }).forEach((item, index) => {
+      attached.disposables.push(
+        attached.editor.addAction({
+          id: `minicursor.plugin.${item.pluginId}.${item.id}`,
+          label: item.title,
+          contextMenuGroupId: '9_minicursor',
+          contextMenuOrder: index,
+          run: (editor) => {
+            const current =
+              attached.group === 'secondary' ? secondaryRef.current : primaryRef.current
+            if (!current) return
+            const sel = editor.getSelection()
+            const model = editor.getModel()
+            host.runItem(item, {
+              location: 'editor',
+              path: current.path,
+              isDirectory: false,
+              language: current.language,
+              selection: sel && model ? model.getValueInRange(sel) : '',
+              line: editor.getPosition()?.lineNumber,
+              column: editor.getPosition()?.column,
+            })
+          },
+        }),
+      )
+    })
+  }
+
+  const attachEditor = (group: EditorGroupId, editor: MonacoEditor.IStandaloneCodeEditor) => {
+    const existing = attachedRef.current.find((a) => a.group === group)
+    if (existing) {
+      for (const d of existing.disposables) d.dispose()
+      attachedRef.current = attachedRef.current.filter((a) => a !== existing)
+    }
+    const attached: AttachedEditor = { group, editor, disposables: [] }
+    attachedRef.current.push(attached)
+    bindPluginActions(attached)
+    editor.onDidDispose(() => {
+§d263250
+      attachedRef.current = attachedRef.current.filter((a) => a !== attached)
+    })
+  }
+
+  useEffect(() => {
+    for (const attached of attachedRef.current) bindPluginActions(attached)
+  }, [plugins.items, primary?.path, primary?.language, secondary?.path, secondary?.language])
+
+  useEffect(() => {
+    if (!monacoRef.current) return
+    applyPluginLanguages(monacoRef.current, plugins.languages)
+  }, [plugins.languages])
+
+  useEffect(() => {
+    monacoRef.current?.editor.setTheme(monacoThemeId(settings.theme))
+  }, [settings.theme])
+
   const handleMount =
-    (path: string): OnMount =>
+    (path: string, group: EditorGroupId): OnMount =>
     (ed, monaco) => {
+      monacoRef.current = monaco
+      registerMonacoThemes(monaco)
+      monaco.editor.setTheme(monacoThemeId(settings.theme))
+      applyPluginLanguages(monaco, pluginsRef.current.languages)
       editorRef.current = ed
+      attachEditor(group, ed)
       ed.onDidChangeCursorPosition((e) => {
         onCursorChange({ line: e.position.lineNumber, column: e.position.column })
       })
@@ -194,7 +302,6 @@ export function EditorArea({
     guides: { indentation: true, bracketPairs: true },
     multiCursorModifier: 'alt',
     readOnly,
-    theme: 'vs-dark',
     padding: { top: 8 },
   })
 
@@ -202,8 +309,8 @@ export function EditorArea({
     if (!tab) {
       return (
         <div className="empty-state">
-          <h2>Mini Cursor</h2>
-          <p>Open a file from the explorer, or press Ctrl+P for quick open.</p>
+          <h2>Halo IDE</h2>
+          <p>Open a file from the explorer, the File menu, or press Ctrl+P.</p>
         </div>
       )
     }
@@ -214,7 +321,13 @@ export function EditorArea({
         className={`editor-pane ${activeGroup === group ? 'focused' : ''}`}
         onMouseDown={() => onSelect(tab.path, group)}
       >
-        <div className="breadcrumbs">
+        <div
+          className="breadcrumbs"
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setTabMenu({ x: e.clientX, y: e.clientY, path: tab.path, language: tab.language })
+          }}
+        >
           {crumbs.map((part, i) => {
             const folder = crumbs.slice(0, i + 1).join('/')
             const isLast = i === crumbs.length - 1
@@ -247,7 +360,8 @@ export function EditorArea({
               original={tab.originalContent}
               modified={tab.content}
               language={tab.language}
-              theme="vs-dark"
+              theme={monacoThemeId(settings.theme)}
+              beforeMount={registerMonacoThemes}
               options={{
                 ...monacoOptions(false),
                 renderSideBySide: true,
@@ -256,6 +370,7 @@ export function EditorArea({
               onMount={(ed) => {
                 const modified = ed.getModifiedEditor()
                 editorRef.current = modified
+                attachEditor(group, modified)
                 modified.onDidChangeModelContent(() => {
                   onChange(tab.path, modified.getValue())
                 })
@@ -269,9 +384,10 @@ export function EditorArea({
               path={tab.path}
               value={tab.content}
               language={tab.language}
-              theme="vs-dark"
+              theme={monacoThemeId(settings.theme)}
+              beforeMount={registerMonacoThemes}
               options={monacoOptions()}
-              onMount={handleMount(tab.path)}
+              onMount={handleMount(tab.path, group)}
             />          )}
         </div>
       </div>
@@ -286,6 +402,10 @@ export function EditorArea({
             key={tab.path}
             className={`tab ${tab.path === activePath || tab.path === secondaryPath ? 'active' : ''} ${tab.path === focused?.path ? 'focused' : ''}`}
             onClick={() => onSelect(tab.path)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setTabMenu({ x: e.clientX, y: e.clientY, path: tab.path, language: tab.language })
+            }}
             onDoubleClick={() => {
               if (splitEnabled) onSelect(tab.path, activeGroup === 'primary' ? 'secondary' : 'primary')
             }}
@@ -306,27 +426,54 @@ export function EditorArea({
             </span>
           </button>
         ))}
+        {showToolbar && (
         <div className="tab-bar-actions">
-          <button className="icon-btn" title="Toggle outline" onClick={onToggleOutline}>
-            <ListTree size={14} />
-          </button>
-          <button className="icon-btn" title="Toggle diff" onClick={onToggleDiff}>
-            <Diff size={14} />
-          </button>
-          <button className="icon-btn" title="Split editor" onClick={onToggleSplit}>
-            <Columns2 size={14} />
-          </button>
-          {focused && (
-            <button
-              className="icon-btn"
-              title="Save (Ctrl+S)"
-              onClick={() => void save(focused)}
-              disabled={!focused.dirty || saving}
-            >
-              <Save size={14} />
+            <button className="icon-btn" title="Toggle outline" onClick={onToggleOutline}>
+              <ListTree size={14} />
             </button>
-          )}
+            <button className="icon-btn" title="Toggle diff" onClick={onToggleDiff}>
+              <Diff size={14} />
+            </button>
+            <button className="icon-btn" title="Split editor" onClick={onToggleSplit}>
+              <Columns2 size={14} />
+            </button>
+            {focused && (
+              <button
+                className="icon-btn"
+                title="Save (Ctrl+S)"
+                onClick={() => void save(focused)}
+                disabled={!focused.dirty || saving}
+              >
+                <Save size={14} />
+              </button>
+            )}
+            {focused &&
+              plugins
+                .titleItemsFor({
+                  location: 'editor',
+                  path: focused.path,
+                  isDirectory: false,
+                  language: focused.language,
+                })
+                .map((item) => (
+                  <button
+                    key={`${item.pluginId}:${item.id}`}
+                    className="icon-btn"
+                    title={item.title}
+                    onClick={() =>
+                      plugins.runItem(item, {
+                        location: 'editor',
+                        path: focused.path,
+                        isDirectory: false,
+                        language: focused.language,
+                      })
+                    }
+                  >
+                    <Puzzle size={14} />
+                  </button>
+                ))}
         </div>
+        )}
       </div>
       <div className={`editor-body ${splitEnabled ? 'split' : ''} ${showOutline ? 'with-outline' : ''}`}>
         <div className="editor-panes">
@@ -368,6 +515,31 @@ export function EditorArea({
           </aside>
         )}
       </div>
+      {tabMenu && (
+        <ContextMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          entries={plugins.itemsFor({
+            location: 'editor',
+            path: tabMenu.path,
+            isDirectory: false,
+            language: tabMenu.language,
+          }).map((item) => ({
+            type: 'item' as const,
+            id: `plugin:${item.pluginId}:${item.id}`,
+            label: item.title,
+            icon: <Puzzle size={14} />,
+            onSelect: () =>
+              plugins.runItem(item, {
+                location: 'editor',
+                path: tabMenu.path,
+                isDirectory: false,
+                language: tabMenu.language,
+              }),
+          }) satisfies ContextMenuEntry)}
+          onClose={() => setTabMenu(null)}
+        />
+      )}
     </section>
   )
 }

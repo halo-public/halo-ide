@@ -27,6 +27,7 @@ interface Props {
   problems: ProblemItem[]
   workspaceRoot?: string
   onOpenProblem: (problem: ProblemItem) => void
+  onOpenLocation?: (path: string, line: number, column: number) => void
   dock: HorizontalDock
   onDockChange: (dock: HorizontalDock) => void
 }
@@ -55,11 +56,14 @@ export const BottomPanel = forwardRef<BottomPanelHandle, Props>(function BottomP
   problems,
   workspaceRoot,
   onOpenProblem,
+  onOpenLocation,
   dock,
   onDockChange,
 }: Props, ref) {
   const outputRef = useRef<HTMLPreElement>(null)
   const terminalRef = useRef<InteractiveTerminalHandle>(null)
+  const terminalRefB = useRef<InteractiveTerminalHandle>(null)
+  const [termSession, setTermSession] = useState<0 | 1>(0)
   const [tabOrder, setTabOrder] = useState<BottomTab[]>(() => loadBottomTabOrder())
   const [draggingTab, setDraggingTab] = useState<BottomTab | null>(null)
   const [dragOverTab, setDragOverTab] = useState<BottomTab | null>(null)
@@ -69,13 +73,16 @@ export const BottomPanel = forwardRef<BottomPanelHandle, Props>(function BottomP
     ref,
     () => ({
       getSelectedTextOrAll: () => {
-        if (tab === 'terminal') return terminalRef.current?.getSelectionOrBuffer() ?? ''
+        if (tab === 'terminal') {
+          const current = termSession === 0 ? terminalRef.current : terminalRefB.current
+          return current?.getSelectionOrBuffer() ?? ''
+        }
         if (tab !== 'output') return ''
         const selection = window.getSelection()?.toString() ?? ''
         return selection || outputRef.current?.innerText || ''
       },
     }),
-    [tab, output],
+    [tab, output, termSession],
   )
 
   const tabLabel = (id: BottomTab) => {
@@ -169,9 +176,38 @@ export const BottomPanel = forwardRef<BottomPanelHandle, Props>(function BottomP
         </select>
       </div>
       <div className="bottom-body">
-        {tab === 'output' && <pre className="terminal-output" ref={outputRef}>{output}</pre>}
-        <div className={tab === 'terminal' ? 'terminal-visible' : 'terminal-hidden'}>
-          <InteractiveTerminal ref={terminalRef} active={tab === 'terminal'} workspaceRoot={workspaceRoot} />
+        {tab === 'output' && (
+          <pre className="terminal-output" ref={outputRef}>
+            {output.split('\n').map((line, i) => (
+              <div
+                key={i}
+                className="output-line"
+                onClick={() => {
+                  const match = /(?:^|[\s'"()])([^\s:'"]+\.[A-Za-z0-9]+):(\d+)(?::(\d+))?/.exec(line)
+                  if (!match || !onOpenLocation) return
+                  onOpenLocation(match[1].replace(/\\/g, '/'), Number(match[2]), Number(match[3] || 1))
+                }}
+              >
+                {line || ' '}
+              </div>
+            ))}
+          </pre>
+        )}
+        {tab === 'terminal' && (
+          <div className="terminal-session-bar">
+            <button className={termSession === 0 ? 'active' : ''} onClick={() => setTermSession(0)}>
+              Terminal 1
+            </button>
+            <button className={termSession === 1 ? 'active' : ''} onClick={() => setTermSession(1)}>
+              Terminal 2
+            </button>
+          </div>
+        )}
+        <div className={tab === 'terminal' && termSession === 0 ? 'terminal-visible' : 'terminal-hidden'}>
+          <InteractiveTerminal ref={terminalRef} active={tab === 'terminal' && termSession === 0} workspaceRoot={workspaceRoot} />
+        </div>
+        <div className={tab === 'terminal' && termSession === 1 ? 'terminal-visible' : 'terminal-hidden'}>
+          <InteractiveTerminal ref={terminalRefB} active={tab === 'terminal' && termSession === 1} workspaceRoot={workspaceRoot} />
         </div>
         {tab === 'problems' && (
           <div className="problems-list">
