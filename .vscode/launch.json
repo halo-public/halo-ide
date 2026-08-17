@@ -25,7 +25,7 @@
       "name": "Release Halo IDE",
       "type": "node-terminal",
       "request": "launch",
-      "command": ".\\scripts\\release.ps1 -Bump patch",
+      "command": ".\\scripts\\release.ps1",
       "cwd": "${workspaceFolder}"
     },
     {

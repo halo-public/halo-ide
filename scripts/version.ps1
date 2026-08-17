@@ -25,7 +25,8 @@ function Set-MiniCursorVersion {
   $Frontend = Join-Path $Root 'frontend'
   Push-Location $Frontend
   try {
-    npm version $Version --no-git-tag-version --allow-same-version
+    # npm version prints "vX.Y.Z"; discard it so callers don't capture it as return output.
+    npm version $Version --no-git-tag-version --allow-same-version | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "npm version failed with exit code $LASTEXITCODE" }
   }
   finally {
@@ -52,7 +53,7 @@ function Get-MiniCursorSemVerParts {
   param([Parameter(Mandatory = $true)][string]$Version)
 
   if ($Version -notmatch '^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$') {
-    throw "Version must be semver, e.g. 0.1.0 or 0.2.0-beta.1"
+§d264208
   }
 
   return [pscustomobject]@{
@@ -90,7 +91,7 @@ function Step-MiniCursorVersion {
   $frontend = Join-Path $Root 'frontend'
   $current = Get-MiniCursorVersion -FrontendDir $frontend
   $next = Get-MiniCursorNextVersion -Version $current -Part $Part
-  Set-MiniCursorVersion -Root $Root -Version $next
+  $null = Set-MiniCursorVersion -Root $Root -Version $next
   return $next
 }
 

@@ -98,7 +98,7 @@ if (-not $SkipTests) {
 
 if ($part -ne 'none') {
   Write-Host "==> Bumping $part version..." -ForegroundColor Cyan
-  $applied = Step-MiniCursorVersion -Root $Root -Part $part
+  $applied = [string]@(Step-MiniCursorVersion -Root $Root -Part $part | Select-Object -Last 1)
   if ($applied -ne $version) {
     throw "Bumped version $applied did not match expected $version"
   }
